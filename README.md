@@ -821,7 +821,7 @@ No object store offers a hard spending cap — Cloudflare included. You can be
 application:
 
 ```bash
-GLOBAL_STORAGE_LIMIT_BYTES=8589934592   # 8 GiB, under R2's 10 GB free tier
+GLOBAL_STORAGE_LIMIT_BYTES=6442450944   # 6 GiB = 6.44 GB, under R2's 10 GB
 DEFAULT_QUOTA_BYTES=1073741824          # 1 GiB per account
 ```
 
@@ -836,10 +836,18 @@ billed dimension that accumulates. Egress is free — that is R2's whole selling
 point — and the operation allowances (1 M writes, 10 M reads) reset monthly and
 are far beyond what one upload per file and one read per download will reach.
 
-The margin is deliberate. The check is advisory before a transfer and binding
+The margin is deliberate, and larger than it first looks. R2 measures in decimal
+GB, so 6 GiB is 6.44 of its GB against an allowance of 10 — about 3.5 GB spare.
+Three things eat into it: the check is advisory before a transfer and binding only
 inside the commit transaction, so simultaneous uploads can each see headroom and
-overshoot by up to one file apiece. 8 GiB against a 10 GB allowance absorbs that;
-setting it to exactly the allowance would not.
+overshoot by up to one `MAX_UPLOAD_BYTES` apiece; Cloudflare rounds usage up to
+the next whole GB; and binned files keep occupying the bucket until the retention
+window passes. Setting the ceiling to exactly the allowance would absorb none of
+that.
+
+One bucket setting matters here: leave **Default Storage Class** as *Standard*.
+The free tier does not apply to Infrequent Access, so switching it would start
+billing from the first byte.
 
 Verified by [`tests/capacity.test.ts`](apps/api/tests/capacity.test.ts): that the
 ceiling refuses a resumable upload when it is *opened* rather than after the

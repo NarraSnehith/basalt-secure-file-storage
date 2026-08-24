@@ -57,11 +57,14 @@ services:
 
       # R2's free allowance is 10 GB of storage, and storage is the only
       # dimension it bills that accumulates — egress is free and the operation
-      # allowances reset monthly. So capping stored bytes caps the bill. 8 GB
-      # leaves room for the overshoot a concurrent upload can cause, and a 1 GB
-      # per-account quota keeps one signup from consuming the lot.
+      # allowances reset monthly. So capping stored bytes caps the bill.
+      #
+      # 6 GiB is 6.44 GB decimal, which is what R2 measures in, leaving ~3.5 GB
+      # of margin. That is deliberate: the ceiling is advisory before a transfer
+      # and binding at commit, so concurrent uploads can overshoot by up to one
+      # MAX_UPLOAD_BYTES each, and Cloudflare rounds usage up to the next GB.
       - key: GLOBAL_STORAGE_LIMIT_BYTES
-        value: '8589934592'
+        value: '6442450944'
       - key: DEFAULT_QUOTA_BYTES
         value: '1073741824'
 
