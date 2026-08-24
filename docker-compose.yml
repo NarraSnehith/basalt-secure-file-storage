@@ -1,0 +1,66 @@
+# Everything Basalt needs, in one command:
+#
+#   cp .env.example .env      (then set the two secrets)
+#   docker compose up --build
+#
+# Then open http://localhost:3000. The API is reached through the web service at
+# /api, so the browser only ever talks to one origin and session cookies stay
+# first-party — the shape this is meant to be deployed in.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: basalt
+      POSTGRES_PASSWORD: basalt
+      POSTGRES_DB: basalt
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U basalt -d basalt']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: postgres://basalt:basalt@postgres:5432/basalt
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:?set this in .env}
+      REFRESH_TOKEN_PEPPER: ${REFRESH_TOKEN_PEPPER:?set this in .env}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_LOCAL_ROOT: ./var/blobs
+      # Behind the web service, which is itself behind whatever proxy you use.
+      TRUST_PROXY: 'true'
+    volumes:
+      - blobs:/repo/apps/api/var/blobs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Migrations run on start, guarded by an advisory lock so parallel replicas
+    # cannot race each other.
+    command: >
+      sh -c "node dist/db/migrate.js up && node dist/server.js"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: /api
+    environment:
+      NODE_ENV: production
+      API_ORIGIN: http://api:4000
+    ports:
+      - '3000:3000'
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  blobs:

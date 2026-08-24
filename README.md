@@ -59,6 +59,21 @@ docker run -d --name basalt-pg -p 5432:5432 \
   -e POSTGRES_USER=basalt -e POSTGRES_PASSWORD=basalt -e POSTGRES_DB=basalt postgres:17-alpine
 ```
 
+### Or the whole thing in one command
+
+```bash
+cp .env.example .env    # then set ACCESS_TOKEN_SECRET and REFRESH_TOKEN_PEPPER
+docker compose up --build
+```
+
+Brings up Postgres, the API and the web app, runs the migrations, and serves
+everything on <http://localhost:3000> through a single origin — the shape this is
+meant to be deployed in, where the browser only ever talks to one host and
+session cookies stay first-party.
+
+There is also a [`render.yaml`](render.yaml) blueprint for a one-click cloud
+deploy; see [Deployment](#deployment).
+
 | Command | Does |
 | --- | --- |
 | `npm run dev` | Both services with reload |
