@@ -743,64 +743,124 @@ and validated by zod at boot. See [`.env.example`](.env.example).
 
 ## Deployment
 
-### Publishing this repository
+Everything here is on a free tier that does not expire, and none of it needs a
+card except where noted. The shape is one always-on container serving both
+halves behind a single hostname, a managed Postgres, and an object store for the
+file bytes.
 
-```bash
-./scripts/publish.sh
+```
+        ┌─────────────── one container ───────────────┐
+ you ──▶│  Next (public port)  ──/api──▶  Express     │──▶  Neon Postgres
+        └─────────────────────────────────────────────┘        (metadata)
+                              │
+                              └────────────────────────▶  R2 / B2 / Supabase
+                                                            (the file bytes)
 ```
 
-Authenticates `gh` in the browser if needed, creates the public repository under
-that account, and pushes. The repository is configured to use `gh`'s credential
-rather than whatever else the keychain holds, so the push goes to the account you
-authorise and not a different one.
+The container is [`Dockerfile`](Dockerfile) at the repository root;
+[`scripts/start.sh`](scripts/start.sh) migrates, then runs both processes and
+takes the container down if either dies so the platform restarts it.
 
-### Somewhere permanent
+### 1. Database — Neon (free, permanent, no card)
 
-The quickest route is the [`render.yaml`](render.yaml) blueprint — Render → New →
-Blueprint, point it at the repository, and it creates the database and both
-services with the secrets generated for you. `docker compose up --build` gives
-the same topology locally.
+Create a project at <https://neon.tech>, then copy the pooled connection string.
+That is your `DATABASE_URL`; also set `DATABASE_SSL=true`.
 
-Whichever host: serve both services behind **one origin**, with `/api/*` routed
-to the API. That is what the cookie and CSRF design assumes, and it is why the
-front end ships with `NEXT_PUBLIC_API_BASE=/api` as its default.
+Free tier is 0.5 GB, which is thousands of files — the *bytes* live in object
+storage, so the database only holds metadata.
 
-### Switching to S3
+### 2. File storage — pick one
 
-One variable:
+The `s3` driver speaks plain S3, so any of these work with nothing but
+credentials:
+
+| | Free | Card needed | Notes |
+| --- | --- | --- | --- |
+| **Cloudflare R2** | 10 GB | yes, for verification | no egress fees, fastest option |
+| **Backblaze B2** | 10 GB | yes, for verification | S3-compatible endpoint |
+| **Supabase Storage** | 1 GB | no | S3 endpoint under Project → Storage → S3 |
+
+Create a bucket, keep it **private**, make an access key, then set:
 
 ```bash
 STORAGE_DRIVER=s3
-S3_BUCKET=basalt-prod
-S3_REGION=eu-west-1
+S3_BUCKET=basalt
+S3_REGION=auto                      # 'auto' for R2; the real region elsewhere
+S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com
 S3_ACCESS_KEY_ID=…
 S3_SECRET_ACCESS_KEY=…
+S3_FORCE_PATH_STYLE=true            # required by MinIO and B2; harmless on R2
 ```
 
-Nothing else changes: uploads are still spooled, hashed and validated locally,
-then `PUT` to the bucket, and downloads become presigned redirects. The bucket
-should stay private — authorisation is the API's job, and the presigned URL is
-the only way in.
+Leave `S3_ACL` and `S3_SSE` unset. R2 and B2 reject those headers, and so does
+any AWS bucket with ACLs disabled.
 
-**Run it behind one origin.** Put a proxy in front of both services, route
-`/api/*` to the API and everything else to Next, and set
-`NEXT_PUBLIC_API_BASE=/api`. Cookies become first-party, CORS stops being
-involved at all, and `__Host-` cookie prefixes apply.
+> The endpoint has to be reachable **from the browser**, not just from the
+> server: downloads are a redirect to a short-lived presigned URL, so the bytes
+> travel straight from the bucket and never occupy the app. An internal-only
+> endpoint will upload fine and fail on download.
 
-**Production checklist**
+### 3. Hosting — Koyeb (always on) or Render (spins down)
 
-- `NODE_ENV=production` (turns on `Secure`, `__Host-` prefixes and HSTS)
-- Real secrets — the app refuses to start with the sample ones
-- `TRUST_PROXY=true` only if there really is a proxy
-- Body size limit on the proxy at or above `MAX_UPLOAD_BYTES`
-- Run `npm run db:migrate` before rolling out; the runner takes an advisory lock,
-  so parallel instances cannot race
-- `GET /api/health` for liveness; it reports database latency
-- Housekeeping (trash purge, session prune, orphan sweep) runs in-process every
-  6 hours. To keep it out of the request path, disable it and run
-  `node dist/maintenance.js` from a cron job or Kubernetes CronJob instead
+**Koyeb** — free tier is one always-on service, so a visitor never waits for a
+cold start. New → Web Service → GitHub → this repo → Dockerfile. Set the
+environment variables from steps 1 and 2, plus:
 
----
+```bash
+NODE_ENV=production
+TRUST_PROXY=true
+```
+
+You get a permanent `*.koyeb.app` hostname. `WEB_ORIGIN` is worked out from it
+automatically, so there is nothing else to set.
+
+**Render** — [`render.yaml`](render.yaml) is a blueprint: New → Blueprint, point
+it at the repo. Free web services sleep after 15 minutes idle and take about a
+minute to wake, which is fine for a demo somebody visits occasionally and poor
+for one being reviewed. It does support custom domains on the free plan, which
+Koyeb reserves for paid.
+
+Either way: **do not use the free tier's disk for files.** It is wiped on every
+deploy. That is what step 2 is for.
+
+### 4. A permanent address
+
+The host subdomain (`your-app.koyeb.app`) is already permanent and free — for
+most purposes that is the answer.
+
+If you want something that reads better, `is-a.dev` gives away permanent
+subdomains through a pull request, and [`docs/is-a-dev-domain.md`](docs/is-a-dev-domain.md)
+has the exact file to submit. It needs a host that supports custom domains, so
+pair it with Render rather than Koyeb's free plan.
+
+There is no longer a source of free permanent *top-level* domains — Freenom, the
+one everybody remembers, stopped issuing them. A `.com` is a few dollars a year
+if the name matters.
+
+### Checking a deployment
+
+```bash
+curl https://your-app.example/api/health
+# {"status":"ok","storage":"s3","dbLatencyMs":12,…}
+```
+
+`storage` tells you which driver is live. If it says `local` on a cloud host,
+uploads will disappear on the next deploy.
+
+### Running it locally in one command
+
+```bash
+cp .env.example .env    # then set the two secrets
+docker compose up --build
+```
+
+Postgres, the API and the web app, on <http://localhost:3000>.
+
+### Switching to S3 for an existing install
+
+One variable — but note that files already stored on local disk are not migrated
+by changing it. The database keeps a `storage_driver` per blob, so old rows still
+point at the old location.
 
 ## Engineering decisions
 
