@@ -211,8 +211,9 @@ const servePublic = route(async (req, res) => {
     }
   }
 
-  await streamBlob(req, res, share, { wants: disposition, isPublic: true });
-
+  // Audited before the transfer, for the same reason as the owner's route: the
+  // response is already flushed by the time streamBlob returns, and the owner
+  // checking "did they download it?" should not race the bytes.
   if (isFullDownload) {
     await registerDownload(share.fileId);
     await recordEvent({
@@ -224,6 +225,8 @@ const servePublic = route(async (req, res) => {
       req,
     });
   }
+
+  await streamBlob(req, res, share, { wants: disposition, isPublic: true });
 });
 
 publicSharesRouter.get('/:slug/content', browseLimit, optionalAuth, servePublic);

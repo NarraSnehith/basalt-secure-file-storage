@@ -8,7 +8,9 @@ const png = Buffer.concat([
 
 async function withFile(client: Client, name = 'notes.txt', body = 'hello basalt') {
   const res = await client.upload(name, body, { contentType: 'text/plain' });
-  expect(res.status).toBe(201);
+  // Include the payload in the message: a bare "expected 401 to be 201" tells
+  // you nothing about which guard rejected it.
+  expect(res.status, `upload of ${name} failed: ${JSON.stringify(res.body)}`).toBe(201);
   return res.body.files[0];
 }
 

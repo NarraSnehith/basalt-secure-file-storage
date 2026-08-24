@@ -9,13 +9,51 @@ import { initStorage } from '../src/storage/index.js';
 // spool directories itself — the same call server.ts makes at boot.
 await initStorage();
 
+// Opt-in diagnostic (BASALT_POOL_WATCH=1): report pool pressure whenever
+// something queues for a connection. node-postgres waits on that forever, so a
+// pool too small for a request's background writes hangs rather than degrades —
+// worth being able to see.
+if (process.env.BASALT_POOL_WATCH) {
+  const { pool } = await import('../src/db/client.js');
+  const timer = setInterval(() => {
+    if (pool.waitingCount > 0) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[pool] waiting=${pool.waitingCount} total=${pool.totalCount} idle=${pool.idleCount}`,
+      );
+    }
+  }, 500);
+  timer.unref();
+}
+
 export const app: Express = createApp();
+
+/**
+ * Every request in the suite carries a response deadline.
+ *
+ * Without one, a request that never completes surfaces as "test timed out" with
+ * no indication of which call hung — the least useful failure a test suite can
+ * produce. With one, the failure names the method and path.
+ */
+const RESPONSE_TIMEOUT = 8000;
+const deadline = { response: RESPONSE_TIMEOUT, deadline: RESPONSE_TIMEOUT * 2 };
 
 /**
  * A browser-shaped client: keeps cookies, tracks the CSRF token the way the real
  * front end does, and sends an Origin header so the CSRF guard is exercised on
  * every mutating call instead of being bypassed by the tests.
  */
+/**
+ * Accounts this file created, so cleanup can remove exactly those.
+ *
+ * `DELETE FROM users` would be simpler, but it reaches across test files: if
+ * two files' processes overlap for even a moment, one wipes the other's
+ * signed-in account and its requests start coming back 401. Every API query is
+ * owner-scoped anyway, so tests do not need a globally empty database — only
+ * one without their own leftovers.
+ */
+const createdUsers = new Set<string>();
+
 export class Client {
   private readonly agent = request.agent(app);
   private csrf = '';
@@ -32,27 +70,27 @@ export class Client {
   }
 
   get(url: string) {
-    return this.agent.get(url).set(this.headers());
+    return this.agent.get(url).set(this.headers()).timeout(deadline);
   }
   head(url: string) {
-    return this.agent.head(url).set(this.headers());
+    return this.agent.head(url).set(this.headers()).timeout(deadline);
   }
   post(url: string) {
-    return this.agent.post(url).set(this.headers());
+    return this.agent.post(url).set(this.headers()).timeout(deadline);
   }
   patch(url: string) {
-    return this.agent.patch(url).set(this.headers());
+    return this.agent.patch(url).set(this.headers()).timeout(deadline);
   }
   put(url: string) {
-    return this.agent.put(url).set(this.headers());
+    return this.agent.put(url).set(this.headers()).timeout(deadline);
   }
   delete(url: string) {
-    return this.agent.delete(url).set(this.headers());
+    return this.agent.delete(url).set(this.headers()).timeout(deadline);
   }
 
   /** POST without the CSRF header, to prove the guard bites. */
   postUnguarded(url: string) {
-    return this.agent.post(url).set({ Origin: 'http://localhost:3000' });
+    return this.agent.post(url).set({ Origin: 'http://localhost:3000' }).timeout(deadline);
   }
 
   async register(password = 'basalt-test-passphrase'): Promise<this> {
@@ -63,6 +101,7 @@ export class Client {
     this.csrf = res.body.csrfToken;
     this.userId = res.body.user.id;
     this.email = email;
+    createdUsers.add(this.userId);
     return this;
   }
 
@@ -167,12 +206,27 @@ export function binaryParser(res: unknown, cb: (err: Error | null, body: Buffer)
 }
 
 /** Anonymous requests — a share-link visitor with no session at all. */
-export const anon = () => request(app);
+export const anon = () => {
+  const agent = request(app);
+  return {
+    get: (url: string) => agent.get(url).timeout(deadline),
+    head: (url: string) => agent.head(url).timeout(deadline),
+    post: (url: string) => agent.post(url).timeout(deadline),
+    put: (url: string) => agent.put(url).timeout(deadline),
+    patch: (url: string) => agent.patch(url).timeout(deadline),
+    delete: (url: string) => agent.delete(url).timeout(deadline),
+  };
+};
 
+/** Remove the accounts this test file created, and nothing else. */
 export async function resetDatabase(): Promise<void> {
-  // users cascades to files, folders, shares and sessions.
-  await db.deleteFrom('users').execute();
-  await db.deleteFrom('events').execute();
+  if (createdUsers.size === 0) return;
+  const ids = [...createdUsers];
+  createdUsers.clear();
+  // Deleting a user cascades to their files, folders, blobs, shares, sessions
+  // and upload sessions.
+  await db.deleteFrom('users').where('id', 'in', ids).execute();
+  await db.deleteFrom('events').where('actor_id', 'in', ids).execute();
 }
 
 export async function closeAll(): Promise<void> {

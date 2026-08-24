@@ -244,14 +244,25 @@ const serveOwn = route(async (req, res) => {
   const { id } = parseParams(idParams, req);
   const { disposition, version } = parseQuery(dispositionSchema, req);
   const blob = await resolveOwnDownload(req.auth!.user.id, id, version);
-  await streamBlob(req, res, blob, { wants: disposition, isPublic: false });
 
-  // Count a download once per full transfer — never for a range probe, and
-  // never for an inline preview, which is looking rather than taking.
+  /*
+   * Recorded *before* the bytes move, not after.
+   *
+   * streamBlob only returns once the response has been flushed, so auditing
+   * afterwards means the row can land after the client already has the file —
+   * long enough for someone who downloads and immediately opens their activity
+   * feed to not see it. Logging the intent is also the more useful record: a
+   * transfer that dies halfway is exactly the event worth having written down.
+   *
+   * Counted once per full transfer: never for a range probe, and never for an
+   * inline preview, which is looking rather than taking.
+   */
   if (req.method === 'GET' && !req.get('range') && disposition !== 'inline') {
     await registerDownload(id);
     await recordEvent({ type: 'file.download', actorId: req.auth!.user.id, fileId: id, subject: blob.name, req });
   }
+
+  await streamBlob(req, res, blob, { wants: disposition, isPublic: false });
 });
 
 filesRouter.get('/:id/content', serveOwn);

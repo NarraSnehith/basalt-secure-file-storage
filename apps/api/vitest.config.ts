@@ -12,6 +12,12 @@ export default defineConfig({
     hookTimeout: 60_000,
     env: {
       NODE_ENV: 'test',
+      // supertest talks to the app over loopback on an ephemeral port. Some
+      // sandboxed environments route outbound HTTP through a proxy that will
+      // happily intercept that too, answering with its own error, so tell every
+      // layer that honours these to leave loopback alone.
+      NO_PROXY: '127.0.0.1,localhost,::1',
+      no_proxy: '127.0.0.1,localhost,::1',
       DATABASE_URL: process.env.TEST_DATABASE_URL ?? 'postgres://basalt:basalt@localhost:5432/basalt_test',
       STORAGE_DRIVER: 'local',
       STORAGE_LOCAL_ROOT: './var/test-blobs',

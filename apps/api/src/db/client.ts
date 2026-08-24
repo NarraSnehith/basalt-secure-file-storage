@@ -13,11 +13,22 @@ types.setTypeParser(types.builtins.INT8, (v) => v);
 
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
-  max: isTest ? 4 : env.DATABASE_POOL_MAX,
+  // Requests fan out into short background writes — audit rows, content
+  // extraction, reference release — so the pool needs headroom above the number
+  // of concurrent requests. node-postgres queues an acquisition *indefinitely*
+  // when the pool is full, so a pool that is too small does not degrade, it
+  // hangs.
+  max: isTest ? 16 : env.DATABASE_POOL_MAX,
   ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : undefined,
   application_name: 'basalt-api',
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
+  // A backstop against exactly that class of bug: a statement that blocks on a
+  // lock fails loudly instead of holding a request open forever. Generous
+  // enough that migrations and bulk purges are unaffected.
+  ...(env.DATABASE_STATEMENT_TIMEOUT > 0
+    ? { statement_timeout: env.DATABASE_STATEMENT_TIMEOUT }
+    : {}),
 });
 
 pool.on('error', (err) => logger.error({ err }, 'idle postgres client errored'));

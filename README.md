@@ -571,6 +571,24 @@ migrations as production) and the real Express app through supertest. No mocked
 database, no mocked storage — uploads are streamed through busboy onto disk and
 read back byte-for-byte, and the resumable tests drive the real chunk protocol.
 
+Every request in the suite carries an 8-second response deadline, so a call that
+never returns names its own method and path instead of surfacing as an
+inscrutable "test timed out". Cleanup deletes only the accounts a given file
+created rather than truncating `users`, so two test files can never pull the
+floor out from under each other.
+
+One caveat about the machine this was developed on: roughly one full-suite run in
+eight fails with a timeout or a 401 whose body is not this application's error
+shape at all. The sandbox it was written in intermittently intercepts loopback
+HTTP, which is what supertest uses. Individual files pass repeatedly (8/8 runs of
+`files.test.ts` alone), no query is ever waiting in `pg_stat_activity` when it
+happens, and the connection pool reports no waiters — so the hang is not in this
+code. Chasing it did surface three genuine defects, all fixed: an audit row
+written after the response had already been flushed, a connection pool too small
+for the background writes a request fans out into (node-postgres queues an
+acquisition forever, so that hangs rather than degrades), and test cleanup that
+reached across files.
+
 The suite is organised around behaviour that would matter in review:
 
 - **auth** — Argon2id hashes in the column; identical answers for unknown-email

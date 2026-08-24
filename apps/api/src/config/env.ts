@@ -39,6 +39,8 @@ const schema = z
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
     DATABASE_SSL: bool(false),
     DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+    /** Milliseconds. 0 disables it. Bounds a query blocked on a lock. */
+    DATABASE_STATEMENT_TIMEOUT: z.coerce.number().int().min(0).max(600_000).default(30_000),
 
     ACCESS_TOKEN_SECRET: z.string().min(32, 'ACCESS_TOKEN_SECRET must be >= 32 chars'),
     REFRESH_TOKEN_PEPPER: z.string().min(32, 'REFRESH_TOKEN_PEPPER must be >= 32 chars'),
