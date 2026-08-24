@@ -15,6 +15,7 @@ import {
   patchFileSchema,
   uploadFieldsSchema,
 } from './schemas.js';
+import { resolveUploadTarget } from '../collaborators/access.js';
 import { ingest } from './ingest.js';
 import {
   emptyTrash,
@@ -60,6 +61,16 @@ filesRouter.post(
       });
     }
 
+    // Where this lands, and whose quota pays: uploading into a folder shared
+    // with you spends the folder owner's space, not yours.
+    let target;
+    try {
+      target = await resolveUploadTarget(req.auth!.user, parsedFields.folderId ?? null);
+    } catch (err) {
+      await discardBlobs(blobs);
+      throw err;
+    }
+
     const created: FileDTO[] = [];
     const rejected: Array<{ name: string; code: string; message: string }> = [];
     const failures: AppError[] = [];
@@ -73,7 +84,7 @@ filesRouter.post(
     for (const blob of blobs) {
       try {
         const result = await ingest(
-          req.auth!.user,
+          target.quotaHolder,
           {
             filename: blob.filename,
             declaredMime: blob.declaredMime,
@@ -83,10 +94,11 @@ filesRouter.post(
             head: blob.head,
           },
           {
-            folderId: parsedFields.folderId ?? null,
+            folderId: target.folderId,
             visibility: parsedFields.visibility,
             onConflict: parsedFields.onConflict,
             source: 'upload',
+            actorId: target.actorId,
           },
           req,
         );
@@ -122,7 +134,7 @@ filesRouter.get(
   '/',
   route(async (req, res) => {
     const query = parseQuery(listQuerySchema, req);
-    const result = await listFiles(req.auth!.user.id, {
+    const result = await listFiles(req.auth!.user, {
       scope: query.scope,
       folderId: query.folderId ?? null,
       q: query.q,
@@ -149,7 +161,7 @@ filesRouter.post(
   '/actions/trash',
   route(async (req, res) => {
     const { ids } = parseBody(idsSchema, req);
-    res.json({ trashed: await trashFiles(req.auth!.user.id, ids, req) });
+    res.json({ trashed: await trashFiles(req.auth!.user, ids, req) });
   }),
 );
 
@@ -177,7 +189,7 @@ filesRouter.post(
     const failed: Array<{ id: string; message: string }> = [];
     for (const id of ids) {
       try {
-        moved.push(await moveFile(req.auth!.user.id, id, folderId ?? null, req));
+        moved.push(await moveFile(req.auth!.user, id, folderId ?? null, req));
       } catch (err) {
         if (isAppError(err)) failed.push({ id, message: err.message });
         else throw err;
@@ -236,14 +248,14 @@ filesRouter.get(
   '/:id',
   route(async (req, res) => {
     const { id } = parseParams(idParams, req);
-    res.json(await getFile(req.auth!.user.id, id));
+    res.json(await getFile(req.auth!.user, id));
   }),
 );
 
 const serveOwn = route(async (req, res) => {
   const { id } = parseParams(idParams, req);
   const { disposition, version } = parseQuery(dispositionSchema, req);
-  const blob = await resolveOwnDownload(req.auth!.user.id, id, version);
+  const blob = await resolveOwnDownload(req.auth!.user, id, version);
 
   /*
    * Recorded *before* the bytes move, not after.
@@ -276,15 +288,16 @@ filesRouter.patch(
     const userId = req.auth!.user.id;
 
     let file: FileDTO | null = null;
-    if (patch.name !== undefined) file = await renameFile(userId, id, patch.name, req);
-    if (patch.folderId !== undefined) file = await moveFile(userId, id, patch.folderId ?? null, req);
+    if (patch.name !== undefined) file = await renameFile(req.auth!.user, id, patch.name, req);
+    if (patch.folderId !== undefined) file = await moveFile(req.auth!.user, id, patch.folderId ?? null, req);
     if (patch.starred !== undefined) file = await setStarred(userId, id, patch.starred);
     if (patch.visibility !== undefined) {
-      const result = await setVisibility(userId, id, patch.visibility, req);
+      const result = await setVisibility(req.auth!.user, id, patch.visibility, req);
       res.json(result);
       return;
     }
-    res.json(file ? await getFile(userId, id) : await getFile(userId, id));
+    void file;
+    res.json(await getFile(req.auth!.user, id));
   }),
 );
 
@@ -292,7 +305,7 @@ filesRouter.delete(
   '/:id',
   route(async (req, res) => {
     const { id } = parseParams(idParams, req);
-    const trashed = await trashFiles(req.auth!.user.id, [id], req);
+    const trashed = await trashFiles(req.auth!.user, [id], req);
     if (trashed === 0) throw new AppError('not_found', 'File not found.');
     res.status(204).end();
   }),

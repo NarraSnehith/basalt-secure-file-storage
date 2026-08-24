@@ -1,4 +1,4 @@
-import express, { type Express } from 'express';
+import express, { type Express, type Request } from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -14,10 +14,17 @@ import { activityRouter } from './modules/activity/routes.js';
 import { authRouter } from './modules/auth/routes.js';
 import { filesRouter } from './modules/files/routes.js';
 import { foldersRouter } from './modules/folders/routes.js';
+import { collaboratorsRouter } from './modules/collaborators/routes.js';
 import { insightsRouter } from './modules/insights/routes.js';
 import { publicRequestsRouter, requestsRouter } from './modules/requests/routes.js';
 import { publicSharesRouter, sharesRouter } from './modules/shares/routes.js';
 import { uploadsRouter } from './modules/uploads/routes.js';
+
+const globalLimit = rateLimit({ name: 'global', windowMs: 60_000, max: 1200 });
+
+/** Exported so the exemption itself is covered by a test. */
+export const isChunkUpload = (req: Pick<Request, 'method' | 'path'>): boolean =>
+  req.method === 'PUT' && /\/chunks\/\d+$/.test(req.path);
 
 export function createApp(): Express {
   const app = express();
@@ -96,8 +103,20 @@ export function createApp(): Express {
     }),
   );
 
-  // A floor under everything, so a single client cannot monopolise the process.
-  app.use('/api', rateLimit({ name: 'global', windowMs: 60_000, max: 1200 }));
+  /*
+   * A floor under everything, so a single client cannot monopolise the process.
+   *
+   * Upload chunks are deliberately exempt. One resumable upload is around four
+   * hundred PUTs, so three files in a minute would trip a global request cap —
+   * the limiter would break the feature it was meant to protect. Chunks are
+   * bounded by something better than a request counter: a session has to exist,
+   * every chunk is validated against its declared size and offset, and an
+   * account may only hold a couple of dozen open sessions at once.
+   */
+  app.use('/api', (req, res, next) => {
+    if (isChunkUpload(req)) return next();
+    return globalLimit(req, res, next);
+  });
 
   // Public share and upload-link endpoints carry no ambient credentials, so CSRF
   // does not apply; everything else is cookie-authenticated and guarded.
@@ -112,6 +131,7 @@ export function createApp(): Express {
   app.use('/api/requests', csrfGuard, requestsRouter);
   app.use('/api/activity', csrfGuard, activityRouter);
   app.use('/api/insights', csrfGuard, insightsRouter);
+  app.use('/api/collab', csrfGuard, collaboratorsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

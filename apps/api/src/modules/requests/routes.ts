@@ -290,7 +290,7 @@ async function sessionForRequest(slug: string, sessionId: string, req: ExpressRe
   const request = await gate(req, slug);
   const session = await db
     .selectFrom('upload_sessions')
-    .select(['id', 'owner_id', 'request_id', 'size_bytes'])
+    .select(['id', 'owner_id', 'actor_id', 'request_id', 'size_bytes'])
     .where('id', '=', sessionId)
     .executeTakeFirst();
   if (!session || session.request_id !== request.id) {
@@ -315,7 +315,9 @@ publicRequestsRouter.put(
 
     const result = await receiveChunk({
       sessionId,
-      ownerId: session.owner_id,
+      // An anonymous sender has no account; the session records the owner as its
+      // actor, and possession of the session id is the credential.
+      ownerId: session.actor_id ?? session.owner_id,
       index,
       body: req,
       declaredLength: declared === undefined ? undefined : Number(declared),
@@ -332,7 +334,7 @@ publicRequestsRouter.get(
     const { slug, sessionId } = parseParams(slugParams.extend({ sessionId: uuid }), req);
     const { session } = await sessionForRequest(slug, sessionId, req);
     noStore(res);
-    res.json({ session: await getSession(sessionId, session.owner_id) });
+    res.json({ session: await getSession(sessionId, session.actor_id ?? session.owner_id) });
   }),
 );
 
@@ -343,7 +345,7 @@ publicRequestsRouter.post(
     const { request, session } = await sessionForRequest(slug, sessionId, req);
     const submitter = String(req.body?.submitter ?? '').trim().slice(0, 80) || null;
 
-    const result = await completeSession(sessionId, session.owner_id, req);
+    const result = await completeSession(sessionId, session.actor_id ?? session.owner_id, req);
     await recordSubmission(
       request.id,
       {
@@ -368,7 +370,7 @@ publicRequestsRouter.delete(
   route(async (req, res) => {
     const { slug, sessionId } = parseParams(slugParams.extend({ sessionId: uuid }), req);
     const { session } = await sessionForRequest(slug, sessionId, req);
-    await abandonSession(sessionId, 'sender_cancelled', session.owner_id);
+    await abandonSession(sessionId, 'sender_cancelled', session.actor_id ?? session.owner_id);
     res.status(204).end();
   }),
 );

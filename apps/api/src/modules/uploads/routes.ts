@@ -4,6 +4,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { rateLimit } from '../../middleware/rate-limit.js';
 import { AppError } from '../../lib/errors.js';
 import { noStore, parseBody, parseParams, route, uuid } from '../../lib/http.js';
+import { resolveUploadTarget } from '../collaborators/access.js';
 import {
   abandonSession,
   completeSession,
@@ -47,15 +48,20 @@ uploadsRouter.post(
   rateLimit({ name: 'upload-session', windowMs: 60_000, max: 240 }),
   route(async (req, res) => {
     const input = parseBody(createSchema, req);
+    // Uploading into a folder shared with you spends the owner's quota, so the
+    // session is opened against them while remaining yours to drive.
+    const target = await resolveUploadTarget(req.auth!.user, input.folderId ?? null);
+
     const outcome = await createSession(
-      req.auth!.user,
+      target.quotaHolder,
       {
         filename: input.filename,
         size: input.size,
         declaredMime: input.declaredMime ?? null,
-        folderId: input.folderId ?? null,
+        folderId: target.folderId,
         checksum: input.checksum ?? null,
         onConflict: input.onConflict,
+        actorId: target.actorId,
         ...(input.visibility ? { visibility: input.visibility } : {}),
       },
       req,

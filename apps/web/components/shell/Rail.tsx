@@ -13,8 +13,9 @@ import { Menu } from '@/components/ui/Menu';
 import { Modal } from '@/components/ui/Modal';
 import {
   IconActivity, IconClock, IconDrive, IconFilter, IconFolder, IconPlus, IconSettings,
-  IconShare, IconStar, IconTrash, IconUpload,
+  IconShare, IconShield, IconStar, IconTrash, IconUpload,
 } from '@/components/ui/icons';
+import { FolderPeople } from '@/components/files/FolderPeople';
 import { StorageCore } from './StorageCore';
 import { FolderTree } from './FolderTree';
 import type { Folder } from '@/lib/types';
@@ -24,6 +25,7 @@ const NAV = [
   { href: '/vault/recent', label: 'Recent', icon: IconClock },
   { href: '/vault/starred', label: 'Starred', icon: IconStar },
   { href: '/vault/shared', label: 'Shared', icon: IconShare },
+  { href: '/vault/with-me', label: 'Shared with me', icon: IconShield },
   { href: '/vault/requests', label: 'Upload links', icon: IconUpload },
   { href: '/vault/insights', label: 'Insights', icon: IconFilter },
   { href: '/vault/activity', label: 'Activity', icon: IconActivity },
@@ -40,6 +42,7 @@ export function Rail({ onClose }: { onClose?: () => void }) {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [renaming, setRenaming] = useState<Folder | null>(null);
+  const [sharing, setSharing] = useState<Folder | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -162,6 +165,7 @@ export function Rail({ onClose }: { onClose?: () => void }) {
               setRenaming(folder);
               setRenameValue(folder.name);
             }}
+            onShare={setSharing}
           />
         </div>
       </div>
@@ -202,6 +206,8 @@ export function Rail({ onClose }: { onClose?: () => void }) {
           )}
         />
       </div>
+
+      {sharing ? <FolderPeople folder={sharing} onClose={() => setSharing(null)} /> : null}
 
       <Modal
         open={newFolderOpen}

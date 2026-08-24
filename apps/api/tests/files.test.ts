@@ -213,9 +213,11 @@ describe('file storage', () => {
     const other = await newClient().register();
     const folder = (await owner.post('/api/folders').send({ name: 'Private' })).body.folder;
 
+    // The destination is checked once, before any file is considered, so the
+    // refusal is a plain 404 rather than a per-file rejection.
     const res = await other.upload('sneak.txt', 'x', { folderId: folder.id });
     expect(res.status).toBe(404);
-    expect(res.body.error.details.rejected[0].code).toBe('not_found');
+    expect(res.body.error.code).toBe('not_found');
   });
 
   it('paginates deterministically with a cursor', async () => {

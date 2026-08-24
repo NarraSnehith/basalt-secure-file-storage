@@ -305,11 +305,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const upload = useCallback(
     (incoming: File[], opts?: { folderId?: string | null; visibility?: 'private' | 'public' }) => {
       if (incoming.length === 0) return;
-      managerRef.current!.add(
-        incoming,
-        opts?.folderId !== undefined ? opts.folderId : folderRef.current,
-        opts?.visibility ?? 'private',
-      );
+      managerRef.current!.add(incoming, opts?.folderId !== undefined ? opts.folderId : folderRef.current);
     },
     [],
   );

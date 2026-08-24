@@ -15,6 +15,7 @@ export type EventType =
   | 'file.version' | 'file.version_restore' | 'file.version_delete'
   | 'file.trash' | 'file.restore' | 'file.purge' | 'file.visibility'
   | 'folder.create' | 'folder.rename' | 'folder.trash' | 'folder.restore'
+  | 'folder.share' | 'folder.unshare'
   | 'share.create' | 'share.update' | 'share.revoke'
   | 'share.view' | 'share.download' | 'share.denied'
   | 'request.create' | 'request.revoke' | 'request.submit' | 'request.denied'

@@ -6,7 +6,9 @@ import { useState } from 'react';
 import { formatBytes } from '@/lib/format';
 import { childFolders, useVault } from '@/lib/vault-context';
 import { Menu } from '@/components/ui/Menu';
-import { IconChevron, IconFolder, IconFolderOpen, IconMore, IconPencil, IconTrash } from '@/components/ui/icons';
+import {
+  IconChevron, IconFolder, IconFolderOpen, IconMore, IconPencil, IconShare, IconTrash,
+} from '@/components/ui/icons';
 import type { Folder } from '@/lib/types';
 
 /**
@@ -15,7 +17,13 @@ import type { Folder } from '@/lib/types';
  * Dragging rows onto a folder is the fastest way to file things, so every node
  * here is a drop zone as well as a link — including a node that is collapsed.
  */
-export function FolderTree({ onRename }: { onRename: (folder: Folder) => void }) {
+export function FolderTree({
+  onRename,
+  onShare,
+}: {
+  onRename: (folder: Folder) => void;
+  onShare: (folder: Folder) => void;
+}) {
   const { folders } = useVault();
   const roots = childFolders(folders, null);
 
@@ -30,7 +38,7 @@ export function FolderTree({ onRename }: { onRename: (folder: Folder) => void })
   return (
     <ul className="space-y-px">
       {roots.map((folder) => (
-        <TreeNode key={folder.id} folder={folder} depth={0} onRename={onRename} />
+        <TreeNode key={folder.id} folder={folder} depth={0} onRename={onRename} onShare={onShare} />
       ))}
     </ul>
   );
@@ -40,10 +48,12 @@ function TreeNode({
   folder,
   depth,
   onRename,
+  onShare,
 }: {
   folder: Folder;
   depth: number;
   onRename: (folder: Folder) => void;
+  onShare: (folder: Folder) => void;
 }) {
   const { folders, move, moveFolder, trashFolder } = useVault();
   const params = useParams<{ id?: string }>();
@@ -124,6 +134,7 @@ function TreeNode({
             width={11}
             items={[
               { label: 'Rename', icon: <IconPencil size={13} />, onSelect: () => onRename(folder) },
+              { label: 'Share with people…', icon: <IconShare size={13} />, onSelect: () => onShare(folder) },
               {
                 label: 'Move to trash',
                 icon: <IconTrash size={13} />,
@@ -153,7 +164,7 @@ function TreeNode({
       {open && children.length ? (
         <ul className="space-y-px">
           {children.map((child) => (
-            <TreeNode key={child.id} folder={child} depth={depth + 1} onRename={onRename} />
+            <TreeNode key={child.id} folder={child} depth={depth + 1} onRename={onRename} onShare={onShare} />
           ))}
         </ul>
       ) : null}

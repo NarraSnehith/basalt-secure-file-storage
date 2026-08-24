@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { uuid } from '../../lib/http.js';
 
 export const listQuerySchema = z.object({
-  scope: z.enum(['folder', 'all', 'trash', 'starred', 'shared', 'recent']).default('folder'),
+  // 'shared' is what I have shared out; 'incoming' is what others shared with me.
+  scope: z.enum(['folder', 'all', 'trash', 'starred', 'shared', 'recent', 'incoming']).default('folder'),
   folderId: uuid.nullish(),
   q: z.string().trim().max(200).optional(),
   kind: z.string().max(120).optional(),

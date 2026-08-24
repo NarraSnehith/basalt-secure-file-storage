@@ -19,11 +19,15 @@ import { setVisibility } from '../modules/files/service.js';
 import { ingest, reindexPending } from '../modules/files/ingest.js';
 import { createShare } from '../modules/shares/service.js';
 import { createRequest } from '../modules/requests/service.js';
+import { inviteCollaborator } from '../modules/collaborators/service.js';
 import type { ReceivedBlob } from '../modules/files/upload.js';
 import { makeGzip, makePdf, makePng, makeWav } from './fixtures.js';
 
 const DEMO_EMAIL = 'demo@basalt.build';
 const DEMO_PASSWORD = 'stone-and-ash-2026';
+// A second account, so folder sharing has somebody to be shared with.
+const GUEST_EMAIL = 'colleague@basalt.build';
+const GUEST_PASSWORD = 'quartz-and-slate-2026';
 
 // The service layer takes a Request purely to stamp ip/user-agent on audit rows.
 const seedRequest = {
@@ -51,10 +55,12 @@ const lorem = (n: number): string =>
 async function main(): Promise<void> {
   await initStorage();
 
-  const existing = await db.selectFrom('users').select('id').where('email', '=', DEMO_EMAIL).executeTakeFirst();
-  if (existing) {
-    await db.deleteFrom('users').where('id', '=', existing.id).execute();
-    console.log('· removed the previous demo account');
+  for (const email of [DEMO_EMAIL, GUEST_EMAIL]) {
+    const existing = await db.selectFrom('users').select('id').where('email', '=', email).executeTakeFirst();
+    if (existing) {
+      await db.deleteFrom('users').where('id', '=', existing.id).execute();
+      console.log(`· removed the previous ${email} account`);
+    }
   }
 
   const user = await db
@@ -64,6 +70,18 @@ async function main(): Promise<void> {
       password_hash: await hashPassword(DEMO_PASSWORD),
       display_name: 'Ada Reyes',
       accent: 'ember',
+      quota_bytes: env.DEFAULT_QUOTA_BYTES,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const guest = await db
+    .insertInto('users')
+    .values({
+      email: GUEST_EMAIL,
+      password_hash: await hashPassword(GUEST_PASSWORD),
+      display_name: 'Wren Okafor',
+      accent: 'lapis',
       quota_bytes: env.DEFAULT_QUOTA_BYTES,
     })
     .returningAll()
@@ -157,8 +175,8 @@ async function main(): Promise<void> {
   const plate = created.find((f) => f.name === 'column-cross-section.png')!;
   const agreement = created.find((f) => f.name === 'storage-agreement.pdf')!;
 
-  await setVisibility(user.id, plate.id, 'public', seedRequest);
-  await setVisibility(user.id, survey.id, 'public', seedRequest);
+  await setVisibility(user, plate.id, 'public', seedRequest);
+  await setVisibility(user, survey.id, 'public', seedRequest);
   await createShare(user.id, agreement.id, {
     label: 'Counterparty review',
     password: 'quartz-seam',
@@ -195,6 +213,24 @@ async function main(): Promise<void> {
       maxBytes: 500 * 1024 * 1024,
       expiresAt: new Date(Date.now() + 30 * 86_400_000),
     },
+    seedRequest,
+  );
+
+  // Share a folder with the second account, so the permission model is visible
+  // without having to set it up by hand.
+  await inviteCollaborator(user, folders['Field notes']!, { email: GUEST_EMAIL, role: 'contributor' }, seedRequest);
+  await inviteCollaborator(user, folders['Photography']!, { email: GUEST_EMAIL, role: 'viewer' }, seedRequest);
+
+  // And something the colleague contributed, credited to them.
+  const contribution = await blobFrom(
+    'wren-site-sketch.png',
+    makePng(420, 300, (x, y) => [200 - (x % 90), 150 + (y % 70), 120 + ((x + y) % 90)]),
+    'image/png',
+  );
+  await ingest(
+    user,
+    contribution,
+    { folderId: folders['Field notes']!, onConflict: 'rename', source: 'upload', actorId: guest.id },
     seedRequest,
   );
 
@@ -238,6 +274,7 @@ async function main(): Promise<void> {
     used      ${(Number(stats.storage_used_bytes) / 1024).toFixed(0)} KB
     shares    2 public links + 1 password-protected (password: quartz-seam)
     request   ${request.url}
+    colleague ${GUEST_EMAIL} / ${GUEST_PASSWORD} (shared folders)
     indexed   ${indexed?.n ?? 0} files searchable by their contents
 `);
   void randomUUID; // keep the import honest if the block above is edited

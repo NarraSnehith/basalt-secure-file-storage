@@ -57,6 +57,31 @@ export async function listFolders(ownerId: string): Promise<FolderDTO[]> {
   return rows.map(toDTO);
 }
 
+/**
+ * Folder access for reads.
+ *
+ * Writes still require ownership (see `assertOwnedFolder`), but a collaborator
+ * needs to be able to resolve the folder they were given, and its subfolders,
+ * to navigate at all.
+ */
+export async function assertFolderReadable(
+  user: { id: string; email: string },
+  folderId: string,
+): Promise<void> {
+  const row = await db
+    .selectFrom('folders')
+    .select(['id', 'owner_id'])
+    .where('id', '=', folderId)
+    .where('deleted_at', 'is', null)
+    .executeTakeFirst();
+  if (!row) throw new AppError('not_found', 'Folder not found.');
+  if (row.owner_id === user.id) return;
+
+  const { loadFolderAccess } = await import('../collaborators/access.js');
+  const access = await loadFolderAccess(user);
+  if (!access.has(folderId)) throw new AppError('not_found', 'Folder not found.');
+}
+
 async function assertOwnedFolder(ownerId: string, folderId: string): Promise<void> {
   const row = await db
     .selectFrom('folders')

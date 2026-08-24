@@ -10,6 +10,10 @@ component library, no UI kit, and no generated boilerplate.
 ```
 demo account   demo@basalt.build / stone-and-ash-2026
                (the sign-in page has a one-click button for it)
+
+colleague      colleague@basalt.build / quartz-and-slate-2026
+               two folders are shared with this account, so you can see the
+               permission model from the other side
 ```
 
 ---
@@ -58,7 +62,7 @@ docker run -d --name basalt-pg -p 5432:5432 \
 | Command | Does |
 | --- | --- |
 | `npm run dev` | Both services with reload |
-| `npm test` | API test suite (87 tests, real Postgres, no mocks) |
+| `npm test` | API test suite (107 tests, real Postgres, no mocks) |
 | `npm run typecheck` | `tsc --noEmit` across both workspaces |
 | `npm run build` | Production build of both |
 | `npm run db:migrate` / `db:reset` / `db:seed` | Schema and demo data |
@@ -82,6 +86,12 @@ filter by twelve file families, sort by name, size or date, keyset-paginated.
 any number of links, each with its own optional password, expiry, download
 budget and preview permission. Every link is revocable and takes effect on the
 next request.
+
+**Collaboration** — share a folder with **people** rather than a link: invite an
+email address, pick viewer, contributor or editor, and revoke one person without
+disturbing anyone else. Invitations sent before someone has an account resolve
+themselves when they register. Files stay with the folder's owner and are
+credited to whoever added them.
 
 **Receiving** — **upload links** point the other way: give someone a link and
 they can send files into one of your folders with no account, under a file cap,
@@ -180,7 +190,48 @@ Every share link keeps receipts — each view, download and failed password
 attempt, with time and address — readable from the link itself rather than by
 filtering a global log.
 
-### 6. "You are out of space" is not actionable
+### 6. A share link is the wrong shape for working together
+
+A link is a bearer token: possession is permission, and revoking it revokes it
+for everybody it was ever forwarded to. That is right for "here is a file" and
+wrong for "we work on this together".
+
+So a folder can also be shared with **people**. You invite an email address; the
+grant attaches to whichever account owns it — now, or later, because a pending
+invitation resolves itself the moment that address registers (a database trigger,
+so no code path can forget). Revoking one person leaves everyone else untouched,
+and every action carries a name.
+
+Three roles, chosen so the boundaries are guessable:
+
+| | viewer | contributor | editor | owner |
+| --- | --- | --- | --- | --- |
+| Open and download | ✓ | ✓ | ✓ | ✓ |
+| See version history | ✓ | ✓ | ✓ | ✓ |
+| Add files | | ✓ | ✓ | ✓ |
+| Manage files they added | | ✓ | ✓ | ✓ |
+| Rename, move, bin anything | | | ✓ | ✓ |
+| Manage the guest list | | | | ✓ |
+| Publish to the internet | | | | ✓ |
+
+Two decisions worth stating, because they are the ones that make it behave like a
+folder rather than a pile of exceptions:
+
+- **A file belongs to the folder's owner, whoever uploaded it.** Their quota
+  pays, their trash receives it, their drive holds it. `created_by` records who
+  contributed it — which is what lets a contributor manage their own additions
+  and nobody else's, and what the interface shows.
+- **A destination must belong to the same account.** Moving a file out of a
+  shared folder and into your own drive would be a way to take it, so it is not
+  a move that exists.
+
+The permission rule itself lives in one function with one table
+([`mayTouchFile`](apps/api/src/modules/collaborators/access.ts)), because a
+permission model spread across fifteen call sites is a permission model with a
+hole in it. Nineteen tests walk the matrix cell by cell, including what each role
+may *not* do.
+
+### 7. "You are out of space" is not actionable
 
 The insights page answers the four questions someone actually has at that
 moment: what is biggest, what is duplicated, what have I not touched in ninety
@@ -266,6 +317,8 @@ Six tables. The full DDL, with comments explaining each constraint, is
 | `upload_sessions` | resumable transfers in flight | received chunks are a `bytea` bitmap updated with `set_bit`, making a retried chunk idempotent |
 | `file_requests` | inbound upload links | caps and expiry are the only thing between a public link and a full disk, so they are columns with check constraints |
 | `request_submissions` | who sent what through a link | keeps the filename and size even after the owner deletes the file |
+| `folder_collaborators` | people a folder is shared with | keyed on an email so an invitation can precede the account; a trigger attaches it on registration |
+| `blob_derivatives` | generated thumbnails | one per blob, so a de-duplicated file's thumbnail is free too |
 | `sessions` | one row per issued refresh token | `family_id` groups a rotation chain, so replaying a retired token can kill the whole chain |
 | `folders` | tree, soft-deleted | partial unique index on `(owner, parent, lower(name))` — sibling names are unique, case-insensitively, ignoring trash |
 | `files` | metadata; points at a blob | `mime_type` is what we serve, `declared_mime` is what the client claimed, `mime_mismatch` flags the disagreement; `search_vector` is generated so it cannot drift |
@@ -317,6 +370,9 @@ Design points worth calling out:
 | Upload integrity | The assembled file is hashed and compared with the digest the client declared; individual chunks may carry their own. A chunk of the wrong length is refused and its bit left clear, so it can simply be resent. |
 | Resource exhaustion via sessions | Sessions expire, are capped per account, spool sparsely, and are swept with their partial bytes by the maintenance pass. |
 | Public write endpoints | An upload link reserves its slot atomically before accepting bytes, releases it if abandoned, pins `onConflict: 'rename'` so a sender cannot version over the owner's file, and returns nothing about the drive it wrote into. |
+| Privilege boundaries | One function decides every file permission, with the roles in a table beside it; nineteen tests walk the matrix, asserting the negatives as well as the positives. |
+| Escalation via a shared folder | A move destination must belong to the same account, so a shared folder is not a route into your own drive. Only an owner may publish, whatever their role. |
+| Invitation enumeration | Inviting is rate limited, and an invitation reveals nothing about whether the address has an account. |
 | Search index poisoning | Extraction only accepts formats we can read unambiguously, and discards output that does not look like text — a garbage index matches everything, which is worse than no index. |
 
 Two deliberate refusals, both visible in the code:
@@ -433,7 +489,7 @@ Cookies carry the session; mutating requests need `X-CSRF-Token`.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `POST` | `/files` | Multipart upload, streamed |
-| `GET` | `/files` | `scope` `folderId` `q` `kind` `sort` `dir` `limit` `cursor` |
+| `GET` | `/files` | `scope` `folderId` `q` `kind` `sort` `dir` `limit` `cursor`. `scope=shared` is what I published; `scope=incoming` is what others shared with me |
 | `GET` | `/files/stats` | Quota, counts, and the per-family breakdown |
 | `GET` | `/files/:id` | Metadata + its share links |
 | `GET` `HEAD` | `/files/:id/content` | Ranges, ETag, `?disposition=inline\|attachment\|auto` |
@@ -471,6 +527,9 @@ Cookies carry the session; mutating requests need `X-CSRF-Token`.
 | `GET` | `/requests/:id/submissions` | What arrived through a link, and from whom |
 | `PATCH` `DELETE` | `/requests/:id` | Change the caps · close the link |
 | `GET` | `/insights` | Largest, duplicated, stale, version-heavy, reclaimable |
+| `GET` | `/collab/shared-with-me` | Folders other people have shared with me |
+| `GET` `POST` | `/collab/folders/:id/people` | The guest list · invite or change a role |
+| `DELETE` | `/collab/folders/:id/people/:personId` | Cut one person off |
 
 ### Public (no session)
 
@@ -566,7 +625,7 @@ a drawer, grid becomes two columns, search moves to its own row) up.
 npm test
 ```
 
-87 tests against a real Postgres database (`basalt_test`, built by the same
+107 tests against a real Postgres database (`basalt_test`, built by the same
 migrations as production) and the real Express app through supertest. No mocked
 database, no mocked storage — uploads are streamed through busboy onto disk and
 read back byte-for-byte, and the resumable tests drive the real chunk protocol.
@@ -625,6 +684,13 @@ The suite is organised around behaviour that would matter in review:
   a slot released when a sender abandons; a password hiding even the title; a
   grant refused on another link; revocation and expiry; the owner's quota being
   the one charged; and a completion response that leaks nothing.
+- **collaborators** — the whole permission matrix: what a viewer, contributor and
+  editor may and may not do; an invitation that resolves when its recipient
+  registers; sharing covering subfolders; a contributor's uploads billed to the
+  owner and credited to them; a contributor unable to touch the owner's files; an
+  editor unable to publish or to move a file into their own drive; revocation
+  cutting one person off and leaving the rest; and contributions surviving the
+  contributor's departure.
 - **search and insights** — a file found by a word inside it; a filename
   fragment still matching; binary not indexed; re-indexing when a version
   replaces the contents; one account's contents invisible to another; duplicate
@@ -778,8 +844,7 @@ Honest about the edges:
 - **Rate limits and upload-session state are single-instance** as described
   above.
 
-Phase three, in the order I would build it: shared folders with named recipients
-and per-recipient permissions instead of bearer links · a thumbnail and
-extraction worker (which also unlocks Office documents and OCR) · optional
-client-side encryption for a zero-knowledge tier · scheduled expiry notices ·
-a `basalt` CLI over the same API.
+Still on the list, in the order I would build it: a thumbnail and extraction
+worker (the schema for derivatives is in place; the generation step and Office /
+OCR support are not) · optional client-side encryption for a zero-knowledge tier ·
+scheduled expiry notices, which needs email · a `basalt` CLI over the same API.

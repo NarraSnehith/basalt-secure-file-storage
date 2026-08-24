@@ -19,6 +19,7 @@ const SCOPE_TITLE: Record<string, { title: string; blurb: string }> = {
   activity: { title: 'Activity', blurb: 'Every action on your account, newest first.' },
   requests: { title: 'Upload links', blurb: 'Let other people send files into your folders.' },
   insights: { title: 'Insights', blurb: 'What is using your space, and what you could reclaim.' },
+  'with-me': { title: 'Shared with me', blurb: 'Folders other people have given you access to.' },
   settings: { title: 'Settings', blurb: 'Profile, password, devices and storage.' },
 };
 

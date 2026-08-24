@@ -117,6 +117,8 @@ function toDTO(row: UploadSessionRow): SessionDTO {
 export interface CreateSessionInput {
   filename: string;
   size: number;
+  /** Who is uploading, when that is not the quota holder. */
+  actorId?: string;
   declaredMime?: string | null;
   folderId?: string | null;
   /** Hex SHA-256 of the whole file, when the client could afford to compute it. */
@@ -168,6 +170,7 @@ export async function createSession(
           ...(input.visibility ? { visibility: input.visibility } : {}),
           submitter: input.submitter ?? null,
           requestId: input.requestId ?? null,
+          ...(input.actorId ? { actorId: input.actorId } : {}),
         },
         req,
       );
@@ -175,10 +178,13 @@ export async function createSession(
     }
   }
 
+  // Counted against the person uploading, not the account being uploaded into:
+  // a busy contributor should not be able to exhaust an owner's allowance.
+  const actorId = input.actorId ?? user.id;
   const open = await db
     .selectFrom('upload_sessions')
     .select(sql<string>`count(*)`.as('n'))
-    .where('owner_id', '=', user.id)
+    .where('actor_id', '=', actorId)
     .where('status', 'in', ['open', 'completing'])
     .executeTakeFirst();
   if (Number(open?.n ?? 0) >= MAX_OPEN_SESSIONS) {
@@ -212,6 +218,7 @@ export async function createSession(
       on_conflict: input.onConflict ?? 'version',
       request_id: input.requestId ?? null,
       submitter: input.submitter ?? null,
+      actor_id: actorId,
       expires_at: new Date(Date.now() + SESSION_TTL_MS),
     })
     .returningAll()
@@ -219,7 +226,7 @@ export async function createSession(
 
   await recordEvent({
     type: 'upload.start',
-    actorId: user.id,
+    actorId,
     subject: filename,
     metadata: { sizeBytes: size, chunkSize, chunkCount, resumable: true },
     req,
@@ -228,26 +235,31 @@ export async function createSession(
   return { kind: 'session', session: toDTO(row) };
 }
 
-async function loadSession(id: string, ownerId: string): Promise<UploadSessionRow> {
+/**
+ * A session belongs to whoever is uploading it. That is `actor_id`, not
+ * `owner_id`: a contributor's session is billed to the folder's owner but must
+ * be driven by the contributor.
+ */
+async function loadSession(id: string, actorId: string): Promise<UploadSessionRow> {
   const row = await db
     .selectFrom('upload_sessions')
     .selectAll()
     .where('id', '=', id)
-    .where('owner_id', '=', ownerId)
+    .where('actor_id', '=', actorId)
     .executeTakeFirst();
   if (!row) throw new AppError('not_found', 'That upload session does not exist.');
   return row;
 }
 
-export async function getSession(id: string, ownerId: string): Promise<SessionDTO> {
-  return toDTO(await loadSession(id, ownerId));
+export async function getSession(id: string, actorId: string): Promise<SessionDTO> {
+  return toDTO(await loadSession(id, actorId));
 }
 
-export async function listOpenSessions(ownerId: string): Promise<SessionDTO[]> {
+export async function listOpenSessions(actorId: string): Promise<SessionDTO[]> {
   const rows = await db
     .selectFrom('upload_sessions')
     .selectAll()
-    .where('owner_id', '=', ownerId)
+    .where('actor_id', '=', actorId)
     .where('status', 'in', ['open', 'completing'])
     .where('expires_at', '>', new Date())
     .orderBy('created_at', 'desc')
@@ -258,6 +270,7 @@ export async function listOpenSessions(ownerId: string): Promise<SessionDTO[]> {
 
 export interface ChunkInput {
   sessionId: string;
+  /** The uploader, which is what a session is keyed on. */
   ownerId: string;
   index: number;
   body: Readable;
@@ -346,8 +359,8 @@ export async function receiveChunk(input: ChunkInput): Promise<ChunkResult> {
  * what the client promised, and hand it to the same ingest path a one-shot
  * upload uses.
  */
-export async function completeSession(id: string, ownerId: string, req?: Request): Promise<IngestResult> {
-  const session = await loadSession(id, ownerId);
+export async function completeSession(id: string, actorId: string, req?: Request): Promise<IngestResult> {
+  const session = await loadSession(id, actorId);
 
   if (session.status === 'complete') {
     throw new AppError('conflict', 'This upload was already completed.');
@@ -369,7 +382,12 @@ export async function completeSession(id: string, ownerId: string, req?: Request
     .executeTakeFirst();
   if (!claimed) throw new AppError('conflict', 'This upload is already being finalised.');
 
-  const owner = await db.selectFrom('users').selectAll().where('id', '=', ownerId).executeTakeFirstOrThrow();
+  // The finished file belongs to the account that owns the destination folder.
+  const owner = await db
+    .selectFrom('users')
+    .selectAll()
+    .where('id', '=', session.owner_id)
+    .executeTakeFirstOrThrow();
 
   try {
     const { checksum, size, head } = await digestSpool(session.spool_key);
@@ -399,6 +417,7 @@ export async function completeSession(id: string, ownerId: string, req?: Request
         source: session.request_id ? 'request' : 'upload',
         submitter: session.submitter,
         requestId: session.request_id,
+        ...(session.actor_id ? { actorId: session.actor_id } : {}),
       },
       req,
     );
@@ -418,15 +437,17 @@ export async function completeSession(id: string, ownerId: string, req?: Request
   }
 }
 
-export async function abandonSession(id: string, reason: string, ownerId?: string): Promise<void> {
+export async function abandonSession(id: string, reason: string, actorId?: string): Promise<void> {
   let query = db
     .selectFrom('upload_sessions')
-    .select(['id', 'spool_key', 'owner_id', 'filename', 'request_id', 'size_bytes', 'status'])
+    .select(['id', 'spool_key', 'owner_id', 'actor_id', 'filename', 'request_id', 'size_bytes', 'status'])
     .where('id', '=', id);
-  if (ownerId) query = query.where('owner_id', '=', ownerId);
+  if (actorId) query = query.where('actor_id', '=', actorId);
   const session = await query.executeTakeFirst();
   if (!session) {
-    if (ownerId) throw new AppError('not_found', 'That upload session does not exist.');
+    // Scoped to a caller: a session they cannot see is a 404. Unscoped (the
+    // maintenance sweep), a missing row means the work is already done.
+    if (actorId) throw new AppError('not_found', 'That upload session does not exist.');
     return;
   }
 
@@ -448,7 +469,7 @@ export async function abandonSession(id: string, reason: string, ownerId?: strin
   logger.debug({ sessionId: id, reason }, 'upload session abandoned');
   await recordEvent({
     type: 'upload.abort',
-    actorId: session.owner_id,
+    actorId: session.actor_id ?? session.owner_id,
     subject: session.filename,
     metadata: { reason },
   });

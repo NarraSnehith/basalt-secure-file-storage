@@ -5,17 +5,24 @@ import type { FileRow, UserRow } from '../../db/types.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../lib/errors.js';
 import { shareSlug } from '../../lib/crypto.js';
-import { extensionOf, suffixName } from '../../lib/filenames.js';
+import { extensionOf, sanitizeFilename, suffixName } from '../../lib/filenames.js';
 import { isBlockedExtension } from '../../lib/mime.js';
 import { logger } from '../../lib/logger.js';
 import { storage } from '../../storage/index.js';
 import { recordEvent } from '../activity/service.js';
 import { assertFolderAccessible } from '../folders/service.js';
+import {
+  denied,
+  loadFolderAccess,
+  mayTouchFile,
+  type FileAction,
+  type FolderAccess,
+} from '../collaborators/access.js';
 import { toFileDTO, toShareDTO, type FileDTO, type ShareDTO } from './dto.js';
 
 // ───────────────────────────── listing ───────────────────────────────────────
 
-export type FileScope = 'folder' | 'all' | 'trash' | 'starred' | 'shared' | 'recent';
+export type FileScope = 'folder' | 'all' | 'trash' | 'starred' | 'shared' | 'recent' | 'incoming';
 export type FileSort = 'name' | 'size' | 'created' | 'updated';
 
 export interface ListQuery {
@@ -56,14 +63,42 @@ function decodeCursor(raw: string): Cursor {
 }
 
 export async function listFiles(
-  ownerId: string,
+  user: UserRow,
   query: ListQuery,
 ): Promise<{ items: FileDTO[]; nextCursor: string | null; total: number | null }> {
   const search = query.q?.trim();
+  const ownerId = user.id;
 
-  let base = db
-    .selectFrom('files')
-    .where('files.owner_id', '=', ownerId);
+  /*
+   * Which files this listing is allowed to see.
+   *
+   * Every scope but two is "my drive", filtered by owner. The exceptions are a
+   * folder shared with me — where the folder itself is the authority, not
+   * ownership — and `incoming`, which gathers everything from every folder
+   * anyone has shared with me.
+   */
+  const access = query.scope === 'folder' || query.scope === 'incoming'
+    ? await loadFolderAccess(user)
+    : new Map<string, never>();
+
+  const sharedFolder =
+    query.scope === 'folder' && query.folderId && access.has(query.folderId) ? query.folderId : null;
+  const incomingFolders = query.scope === 'incoming' ? [...access.keys()] : [];
+
+  if (query.scope === 'incoming' && incomingFolders.length === 0) {
+    return { items: [], nextCursor: null, total: 0 };
+  }
+
+  let base = db.selectFrom('files');
+
+  if (sharedFolder) {
+    // Authorised by the grant on the folder, so the owner filter would be wrong.
+    base = base.where('files.folder_id', '=', sharedFolder);
+  } else if (incomingFolders.length > 0) {
+    base = base.where('files.folder_id', 'in', incomingFolders);
+  } else {
+    base = base.where('files.owner_id', '=', ownerId);
+  }
 
   if (query.scope === 'trash') {
     base = base.where('files.deleted_at', 'is not', null);
@@ -87,8 +122,10 @@ export async function listFiles(
     );
   }
   // Searching and the flat scopes intentionally ignore folder boundaries —
-  // people search their whole drive, not the folder they happen to be in.
-  if (query.scope === 'folder' && !search) {
+  // people search their whole drive, not the folder they happen to be in. A
+  // shared folder is the exception: its boundary *is* the permission, so search
+  // inside it stays inside it.
+  if (query.scope === 'folder' && !sharedFolder && !search) {
     base = query.folderId
       ? base.where('files.folder_id', '=', query.folderId)
       : base.where('files.folder_id', 'is', null);
@@ -179,8 +216,8 @@ export async function listFiles(
 // ───────────────────────────── single file ───────────────────────────────────
 
 /**
- * Load a file *scoped to its owner*. Every read and write in this module goes
- * through here, so an id belonging to another account is a 404 — the only safe
+ * Load a file *scoped to its owner*. Used by the operations that only an owner
+ * may perform, so an id belonging to another account is a 404 — the only safe
  * answer to "does this file exist?".
  */
 async function ownedFile(ownerId: string, id: string, opts: { includeTrashed?: boolean } = {}): Promise<FileRow> {
@@ -191,15 +228,52 @@ async function ownedFile(ownerId: string, id: string, opts: { includeTrashed?: b
   return row;
 }
 
-export async function getFile(ownerId: string, id: string): Promise<{ file: FileDTO; shares: ShareDTO[] }> {
-  const row = await ownedFile(ownerId, id, { includeTrashed: true });
-  const shares = await db
-    .selectFrom('share_links')
-    .selectAll()
-    .where('file_id', '=', id)
-    .where('revoked_at', 'is', null)
-    .orderBy('created_at', 'desc')
-    .execute();
+/**
+ * Load a file the caller is allowed to take this action on — theirs, or one in a
+ * folder shared with them at a sufficient role.
+ *
+ * The permission decision itself lives in `mayTouchFile`, so the rule is stated
+ * once rather than re-derived at each call site. A refusal is a 404, identical to
+ * a file that does not exist.
+ */
+async function fileForAction(
+  user: UserRow,
+  id: string,
+  action: FileAction,
+  opts: { includeTrashed?: boolean; access?: FolderAccess } = {},
+): Promise<FileRow> {
+  let q = db.selectFrom('files').selectAll().where('id', '=', id);
+  if (!opts.includeTrashed) q = q.where('deleted_at', 'is', null);
+  const row = await q.executeTakeFirst();
+  if (!row) throw denied();
+
+  if (row.owner_id === user.id) return row;
+
+  const access = opts.access ?? (await loadFolderAccess(user));
+  const allowed = mayTouchFile(
+    user,
+    { ownerId: row.owner_id, folderId: row.folder_id, createdBy: row.created_by },
+    action,
+    access,
+  );
+  if (!allowed) throw denied();
+  return row;
+}
+
+export async function getFile(user: UserRow, id: string): Promise<{ file: FileDTO; shares: ShareDTO[] }> {
+  const row = await fileForAction(user, id, 'read', { includeTrashed: true });
+  // Only the owner sees the links: a collaborator has no business knowing which
+  // of the owner's files are exposed publicly, or with what conditions.
+  const shares =
+    row.owner_id === user.id
+      ? await db
+          .selectFrom('share_links')
+          .selectAll()
+          .where('file_id', '=', id)
+          .where('revoked_at', 'is', null)
+          .orderBy('created_at', 'desc')
+          .execute()
+      : [];
   const toggle = shares.find((s) => s.kind === 'toggle');
   return {
     file: toFileDTO(row, { publicSlug: toggle?.slug ?? null, shareCount: shares.length }),
@@ -207,9 +281,9 @@ export async function getFile(ownerId: string, id: string): Promise<{ file: File
   };
 }
 
-export async function renameFile(ownerId: string, id: string, rawName: string, req: Request): Promise<FileDTO> {
-  const current = await ownedFile(ownerId, id);
-  const { sanitizeFilename } = await import('../../lib/filenames.js');
+export async function renameFile(user: UserRow, id: string, rawName: string, req: Request): Promise<FileDTO> {
+  const current = await fileForAction(user, id, 'write');
+  const ownerId = current.owner_id;
   const name = sanitizeFilename(rawName, current.name);
 
   // Renaming must not become a way to smuggle in an executable extension.
@@ -246,8 +320,11 @@ export async function renameFile(ownerId: string, id: string, rawName: string, r
   }
 }
 
-export async function moveFile(ownerId: string, id: string, folderId: string | null, req: Request): Promise<FileDTO> {
-  await ownedFile(ownerId, id);
+export async function moveFile(user: UserRow, id: string, folderId: string | null, req: Request): Promise<FileDTO> {
+  const current = await fileForAction(user, id, 'write');
+  const ownerId = current.owner_id;
+  // The destination has to belong to the same account: moving a file out of a
+  // shared folder and into your own drive would be a way to take it.
   if (folderId) await assertFolderAccessible(ownerId, folderId);
 
   try {
@@ -312,11 +389,13 @@ export async function enablePublicLink(ownerId: string, fileId: string): Promise
 }
 
 export async function setVisibility(
-  ownerId: string,
+  owner: UserRow,
   id: string,
   visibility: 'private' | 'public',
   req: Request,
 ): Promise<{ file: FileDTO; shares: ShareDTO[] }> {
+  // Publishing is an owner's decision alone — see mayTouchFile('publish').
+  const ownerId = owner.id;
   const current = await ownedFile(ownerId, id);
 
   await db.transaction().execute(async (trx) => {
@@ -350,22 +429,40 @@ export async function setVisibility(
     req,
   });
 
-  return getFile(ownerId, id);
+  return getFile(owner, id);
 }
 
 // ───────────────────────────── trash lifecycle ──────────────────────────────
 
-export async function trashFiles(ownerId: string, ids: string[], req: Request): Promise<number> {
+/**
+ * Move files to the trash — the *owner's* trash, even when a collaborator did
+ * it, because that is whose drive the file lives in and whose quota it still
+ * occupies. Each id is authorised individually, so a mixed selection cannot
+ * smuggle one through.
+ */
+export async function trashFiles(user: UserRow, ids: string[], req: Request): Promise<number> {
   const now = new Date();
   const purgeAfter = new Date(now.getTime() + env.TRASH_RETENTION_DAYS * 86_400_000);
+
+  const access = await loadFolderAccess(user);
+  const permitted: string[] = [];
+  for (const id of ids) {
+    try {
+      const row = await fileForAction(user, id, 'write', { access });
+      permitted.push(row.id);
+    } catch {
+      // Silently skipped: reporting which ids were refused would leak whether
+      // they exist.
+    }
+  }
+  if (permitted.length === 0) return 0;
 
   const rows = await db
     .updateTable('files')
     .set({ deleted_at: now, purge_after: purgeAfter, starred: false })
-    .where('owner_id', '=', ownerId)
-    .where('id', 'in', ids)
+    .where('id', 'in', permitted)
     .where('deleted_at', 'is', null)
-    .returning(['id', 'name'])
+    .returning(['id', 'name', 'owner_id'])
     .execute();
 
   if (rows.length) {
@@ -373,20 +470,18 @@ export async function trashFiles(ownerId: string, ids: string[], req: Request): 
     await db
       .updateTable('share_links')
       .set({ revoked_at: now })
-      .where('owner_id', '=', ownerId)
       .where('file_id', 'in', rows.map((r) => r.id))
       .where('revoked_at', 'is', null)
       .execute();
     await db
       .updateTable('files')
       .set({ visibility: 'private' })
-      .where('owner_id', '=', ownerId)
       .where('id', 'in', rows.map((r) => r.id))
       .execute();
   }
 
   for (const row of rows) {
-    await recordEvent({ type: 'file.trash', actorId: ownerId, fileId: row.id, subject: row.name, req });
+    await recordEvent({ type: 'file.trash', actorId: user.id, fileId: row.id, subject: row.name, req });
   }
   return rows.length;
 }
@@ -541,11 +636,11 @@ export interface DownloadTarget {
  * file and its twin resolve to the same object.
  */
 export async function resolveOwnDownload(
-  ownerId: string,
+  user: UserRow,
   id: string,
   version?: number,
 ): Promise<DownloadTarget> {
-  const row = await ownedFile(ownerId, id, { includeTrashed: true });
+  const row = await fileForAction(user, id, 'read', { includeTrashed: true });
 
   if (version !== undefined && version !== row.version) {
     const revision = await db

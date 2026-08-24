@@ -191,3 +191,27 @@ export interface FileListResponse {
   nextCursor: string | null;
   total: number | null;
 }
+
+export type CollaboratorRole = 'viewer' | 'contributor' | 'editor';
+
+export interface SharedFolder {
+  id: string;
+  name: string;
+  role: CollaboratorRole;
+  ownerName: string;
+  ownerEmail: string;
+  fileCount: number;
+  sizeBytes: number;
+  sharedAt: string;
+}
+
+export interface Collaborator {
+  id: string;
+  email: string;
+  role: CollaboratorRole;
+  /** False while the invitation waits for an account with that address. */
+  active: boolean;
+  displayName: string | null;
+  createdAt: string;
+  lastSeenAt: string | null;
+}

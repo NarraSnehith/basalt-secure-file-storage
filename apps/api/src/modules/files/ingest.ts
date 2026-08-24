@@ -14,6 +14,7 @@ import { newStorageKey, storage } from '../../storage/index.js';
 import { recordEvent } from '../activity/service.js';
 import { assertFolderAccessible } from '../folders/service.js';
 import { toFileDTO, type FileDTO } from './dto.js';
+import { enablePublicLink } from './service.js';
 
 /**
  * The single door into the store.
@@ -46,6 +47,11 @@ export interface IngestOptions {
   submitter?: string | null;
   requestId?: string | null;
   note?: string | null;
+  /**
+   * Who performed the upload, when that is not the quota holder — a contributor
+   * adding to someone else's shared folder. Defaults to the quota holder.
+   */
+  actorId?: string;
 }
 
 export interface IngestResult {
@@ -260,6 +266,9 @@ interface CommitOutcome {
 async function commitFile(user: UserRow, input: CommitInput): Promise<CommitOutcome> {
   const extension = extensionOf(input.filename);
   const { opts, resolved } = input;
+  // The file belongs to the folder's owner; the person who put it there is
+  // recorded separately, which is what a shared folder needs to show.
+  const actorId = opts.actorId ?? user.id;
 
   return db.transaction().execute(async (trx) => {
     const owner = await trx
@@ -349,7 +358,7 @@ async function commitFile(user: UserRow, input: CommitInput): Promise<CommitOutc
           size_bytes: input.size,
           source: opts.source,
           note: opts.note ?? null,
-          created_by: user.id,
+          created_by: actorId,
         })
         .execute();
 
@@ -385,6 +394,7 @@ async function commitFile(user: UserRow, input: CommitInput): Promise<CommitOutc
           extension,
           visibility: 'private',
           request_id: opts.requestId ?? null,
+          created_by: actorId,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -408,7 +418,7 @@ async function commitFile(user: UserRow, input: CommitInput): Promise<CommitOutc
         size_bytes: input.size,
         source: opts.source,
         note: opts.note ?? null,
-        created_by: user.id,
+        created_by: actorId,
       })
       .execute();
 
@@ -427,13 +437,12 @@ async function finish(
 
   let publicSlug: string | null = null;
   if (opts.visibility === 'public' && !outcome.versioned) {
-    const { enablePublicLink } = await import('./service.js');
     publicSlug = (await enablePublicLink(user.id, outcome.row.id)).slug;
   }
 
   await recordEvent({
     type: outcome.versioned ? 'file.version' : 'file.upload',
-    actorId: user.id,
+    actorId: opts.actorId ?? user.id,
     fileId: outcome.row.id,
     subject: outcome.row.name,
     metadata: {

@@ -94,7 +94,6 @@ const BLOCKED = new Set([
 
 /** Above this, hashing costs more than the instant upload can save. */
 const HASH_LIMIT = 512 * 1024 * 1024;
-const CHUNK_ATTEMPTS = 3;
 const STORAGE_KEY = 'basalt:sessions';
 
 const extensionOf = (name: string): string => {
@@ -168,7 +167,7 @@ export class UploadManager {
     };
   }
 
-  add(files: File[], folderId: string | null, visibility: 'private' | 'public' = 'private'): void {
+  add(files: File[], folderId: string | null): void {
     for (const file of files) {
       const transfer = this.blank(file.name, file.size, folderId);
 
@@ -195,7 +194,6 @@ export class UploadManager {
         running: false,
       });
       this.order.push(transfer.id);
-      void visibility;
     }
     this.emit();
     this.pump();

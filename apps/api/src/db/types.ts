@@ -7,6 +7,7 @@ export type ShareKind = 'toggle' | 'custom';
 export type VersionSource = 'upload' | 'request' | 'restore';
 export type UploadStatus = 'open' | 'completing' | 'complete' | 'aborted';
 export type ConflictMode = 'version' | 'rename';
+export type CollaboratorRole = 'viewer' | 'contributor' | 'editor';
 
 export interface UsersTable {
   id: Generated<string>;
@@ -54,6 +55,7 @@ export interface BlobsTable {
   storage_driver: string;
   storage_key: string;
   ref_count: Generated<number>;
+  derivatives_checked: Generated<boolean>;
   created_at: Timestamp;
 }
 
@@ -90,6 +92,8 @@ export interface UploadSessionsTable {
   on_conflict: Generated<ConflictMode>;
   request_id: string | null;
   submitter: string | null;
+  /** Who is uploading, which may differ from whose quota pays. */
+  actor_id: string | null;
   created_at: Timestamp;
   updated_at: Timestamp;
   expires_at: Timestamp;
@@ -126,6 +130,32 @@ export interface RequestSubmissionsTable {
   created_at: Timestamp;
 }
 
+export interface FolderCollaboratorsTable {
+  id: Generated<string>;
+  folder_id: string;
+  granted_by: string;
+  email: string;
+  user_id: string | null;
+  role: Generated<CollaboratorRole>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  accepted_at: Timestamp | null;
+  last_seen_at: Timestamp | null;
+  revoked_at: Timestamp | null;
+}
+
+export interface BlobDerivativesTable {
+  id: Generated<string>;
+  blob_id: string;
+  kind: string;
+  storage_key: string;
+  mime_type: string;
+  size_bytes: ColumnType<string, number | string, number | string>;
+  width: number | null;
+  height: number | null;
+  created_at: Timestamp;
+}
+
 export interface FilesTable {
   id: Generated<string>;
   owner_id: string;
@@ -142,6 +172,7 @@ export interface FilesTable {
   version: Generated<number>;
   version_count: Generated<number>;
   request_id: string | null;
+  created_by: string | null;
   content_text: string | null;
   content_indexed: Generated<boolean>;
   visibility: Generated<FileVisibility>;
@@ -191,6 +222,8 @@ export interface Database {
   file_versions: FileVersionsTable;
   upload_sessions: UploadSessionsTable;
   file_requests: FileRequestsTable;
+  folder_collaborators: FolderCollaboratorsTable;
+  blob_derivatives: BlobDerivativesTable;
   request_submissions: RequestSubmissionsTable;
   sessions: SessionsTable;
   folders: FoldersTable;
@@ -212,3 +245,5 @@ export type FileVersionRow = Selectable<FileVersionsTable>;
 export type UploadSessionRow = Selectable<UploadSessionsTable>;
 export type FileRequestRow = Selectable<FileRequestsTable>;
 export type RequestSubmissionRow = Selectable<RequestSubmissionsTable>;
+export type FolderCollaboratorRow = Selectable<FolderCollaboratorsTable>;
+export type BlobDerivativeRow = Selectable<BlobDerivativesTable>;

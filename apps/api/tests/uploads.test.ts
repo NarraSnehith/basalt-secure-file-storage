@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { isChunkUpload } from '../src/app.js';
 import { binaryParser, closeAll, newClient, resetDatabase } from './helpers.js';
 
 /** Deterministic bytes, so the same call always produces the same digest. */
@@ -17,6 +18,23 @@ afterAll(closeAll);
 
 describe('resumable uploads', () => {
   beforeEach(resetDatabase);
+
+  /*
+   * The global request limiter would otherwise break the feature it protects:
+   * one resumable upload is around four hundred PUTs, so a handful of files in
+   * a minute trips a 1200/minute cap. Chunks are exempt, bounded instead by
+   * session validation and the per-account limit on open sessions.
+   */
+  it('exempts chunk uploads from the global request limiter', () => {
+    expect(isChunkUpload({ method: 'PUT', path: '/uploads/abc/chunks/0' })).toBe(true);
+    expect(isChunkUpload({ method: 'PUT', path: '/r/slug/uploads/abc/chunks/137' })).toBe(true);
+
+    // Everything else still counts, including near-misses.
+    expect(isChunkUpload({ method: 'POST', path: '/uploads/abc/chunks/0' })).toBe(false);
+    expect(isChunkUpload({ method: 'PUT', path: '/uploads/abc/chunks/' })).toBe(false);
+    expect(isChunkUpload({ method: 'PUT', path: '/uploads/abc/chunks/0/extra' })).toBe(false);
+    expect(isChunkUpload({ method: 'PUT', path: '/files/abc' })).toBe(false);
+  });
 
   it('splits a file into chunks and reassembles it byte-for-byte', async () => {
     const client = await newClient().register();
