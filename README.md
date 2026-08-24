@@ -743,7 +743,31 @@ and validated by zod at boot. See [`.env.example`](.env.example).
 
 ## Deployment
 
-Switching to S3 is one variable:
+### Publishing this repository
+
+```bash
+./scripts/publish.sh
+```
+
+Authenticates `gh` in the browser if needed, creates the public repository under
+that account, and pushes. The repository is configured to use `gh`'s credential
+rather than whatever else the keychain holds, so the push goes to the account you
+authorise and not a different one.
+
+### Somewhere permanent
+
+The quickest route is the [`render.yaml`](render.yaml) blueprint — Render → New →
+Blueprint, point it at the repository, and it creates the database and both
+services with the secrets generated for you. `docker compose up --build` gives
+the same topology locally.
+
+Whichever host: serve both services behind **one origin**, with `/api/*` routed
+to the API. That is what the cookie and CSRF design assumes, and it is why the
+front end ships with `NEXT_PUBLIC_API_BASE=/api` as its default.
+
+### Switching to S3
+
+One variable:
 
 ```bash
 STORAGE_DRIVER=s3
