@@ -30,7 +30,7 @@ FROM node:22-alpine AS run
 WORKDIR /repo
 ENV NODE_ENV=production
 
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini nginx gettext
 
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
@@ -40,18 +40,24 @@ RUN npm ci --omit=dev && npm cache clean --force
 # dist already contains the .sql migrations (see build:sql).
 COPY --from=build /repo/apps/api/dist apps/api/dist
 COPY --from=build /repo/apps/web/.next apps/web/.next
-COPY apps/web/public apps/web/public
+# No apps/web/public: the only static asset is the favicon, and the App Router
+# serves that from app/icon.svg, which is already inside .next. An empty public/
+# here would break the build on any fresh clone anyway — git does not track empty
+# directories, so it exists on a working copy and not in the repository.
 COPY apps/web/next.config.mjs apps/web/
+COPY docker/nginx.conf.template docker/nginx.conf.template
 COPY scripts/start.sh scripts/start.sh
 
 # Only used when STORAGE_DRIVER=local. On a host with an ephemeral disk, set
 # STORAGE_DRIVER=s3 instead — uploads then outlive every redeploy.
-RUN mkdir -p apps/api/var/blobs && chown -R node:node apps/api/var
+RUN mkdir -p apps/api/var/blobs && chown -R node:node apps/api/var \
+ && chown -R node:node /var/lib/nginx /var/log/nginx
 USER node
 
 # The platform tells us which port to serve on; the API stays on loopback.
 ENV PORT=3000
 ENV API_PORT=4000
+ENV WEB_PORT=3100
 ENV API_ORIGIN=http://127.0.0.1:4000
 EXPOSE 3000
 

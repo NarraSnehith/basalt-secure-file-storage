@@ -10,6 +10,10 @@ coverage/
 .env.*.local
 var/
 !var/.gitkeep
-storage/
+# Deliberately no bare `storage/` rule. Uploaded blobs live under var/, which is
+# already covered above, and gitignore patterns containing no slash match at
+# every depth — so `storage/` silently excluded apps/api/src/storage, taking the
+# storage drivers out of the repository while leaving them on disk. The build
+# then passes locally and fails on a fresh clone.
 *.tsbuildinfo
 DEPLOY-ENV.local.txt

@@ -33,10 +33,13 @@ const nextConfig = {
   env: { NEXT_PUBLIC_API_BASE: API_BASE },
 
   /**
-   * Same-origin deployments keep working: /api/* is forwarded to the API
-   * service, so setting NEXT_PUBLIC_API_BASE=/api is all it takes to run both
-   * behind a single hostname. (In development the browser talks to the API
-   * directly instead — the dev rewrite proxy cannot carry large uploads.)
+   * A convenience for running `next start` on its own, not the deployment path.
+   *
+   * This rewrite buffers proxied request bodies in memory and truncates them at
+   * 10 MB, so it cannot carry uploads — which is why development points the
+   * browser straight at the API, and why the container puts nginx in front and
+   * never lets an /api request reach Next at all. See
+   * docker/nginx.conf.template.
    */
   async rewrites() {
     return [{ source: '/api/:path*', destination: `${API_ORIGIN}/api/:path*` }];

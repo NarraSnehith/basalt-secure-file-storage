@@ -749,17 +749,41 @@ behind a single hostname, a managed Postgres, and an object store for the file
 bytes.
 
 ```
-        ┌─────────────── one container ───────────────┐
- you ──▶│  Next (public port)  ──/api──▶  Express     │──▶  Neon Postgres
-        └─────────────────────────────────────────────┘        (metadata)
-                              │
-                              └────────────────────────▶  R2 / B2 / Supabase
-                                                            (the file bytes)
+        ┌──────────────────── one container ────────────────────┐
+        │                  ┌─/api/*─▶  Express :4000            │──▶  Neon Postgres
+ you ──▶│  nginx :$PORT ───┤                                    │       (metadata)
+        │                  └─else───▶  Next :3100               │
+        └──────────────────────────────────────────────────────-┘
+                                  │
+                                  └───────────────────────────────▶  R2 / B2
+                                                                   (the bytes)
 ```
 
 The container is [`Dockerfile`](Dockerfile) at the repository root;
-[`scripts/start.sh`](scripts/start.sh) migrates, then runs both processes and
-takes the container down if either dies so the platform restarts it.
+[`scripts/start.sh`](scripts/start.sh) migrates, renders the nginx config, then
+runs all three processes and takes the container down if any of them dies so the
+platform restarts it.
+
+**Why nginx rather than letting Next serve the public port.** It is the obvious
+arrangement — Next on `$PORT`, `/api/*` forwarded to Express through
+`next.config.mjs` rewrites — and it silently caps every upload at 10 MB. Next
+buffers a proxied request body in memory so it can be read more than once, and
+past the limit it keeps the first 10 MB, logs a warning and resets the
+connection. The client sees a 500 with no explanation. Raising
+`experimental.proxyClientMaxBodySize` only relocates the failure: a 512 MB
+upload would then want 512 MB of heap on a 512 MB instance.
+
+So Next stops being an API gateway. nginx streams request bodies straight to
+whichever service owns the route — `proxy_request_buffering off`, no size ceiling
+of its own, because the API already enforces `MAX_UPLOAD_BYTES` and returns a
+structured 413 for it. Both Node processes move to loopback.
+
+One subtlety worth knowing about if you change
+[`docker/nginx.conf.template`](docker/nginx.conf.template): it passes
+`X-Forwarded-For` through *unchanged* rather than appending to it. The container
+is one hop from the platform's edge, and Express is configured to trust exactly
+one proxy; appending would make it read the edge's address as the client and
+bucket every visitor into the same rate-limit window.
 
 ### 1. Database — Neon (free, permanent, no card)
 

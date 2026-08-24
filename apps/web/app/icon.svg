@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Basalt">
+  <title>Basalt</title>
+  <!--
+    Columnar basalt: lava cools and cracks into hexagonal columns. Two tones so
+    it reads as a solid column rather than a flat outline, and no strokes or fine
+    detail, because the shape has to survive being drawn 16 pixels wide.
+  -->
+  <path d="M16 1.5 28.6 8.75v14.5L16 30.5 3.4 23.25V8.75Z" fill="#ee6c2f"/>
+  <path d="M16 1.5v29L3.4 23.25V8.75Z" fill="#bf4f1c"/>
+</svg>

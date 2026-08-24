@@ -1,0 +1,97 @@
+# Front door for the combined container.
+#
+# Why this exists at all: with Next on the public port, /api/* reached Express
+# through Next's `rewrites` proxy — and that proxy buffers the entire request
+# body in memory (10 MB by default) so the body can be read more than once.
+# Uploads above the limit were silently truncated and the connection reset.
+# Raising `experimental.proxyClientMaxBodySize` only moves the failure: a 512 MB
+# upload would then need 512 MB of heap on a 512 MB instance.
+#
+# So Next stops being an API gateway. nginx streams request bodies straight to
+# whichever service owns the route, with no buffering and no size ceiling of its
+# own, and both Node processes move to loopback.
+#
+# Rendered by scripts/start.sh — only ${PORT}, ${API_PORT} and ${WEB_PORT} are
+# substituted, so nginx's own $variables survive.
+
+worker_processes 1;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+
+events { worker_connections 1024; }
+
+http {
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+  access_log    off;
+
+  # Non-root: everything nginx writes has to live somewhere it owns.
+  client_body_temp_path /tmp/nginx-body;
+  proxy_temp_path       /tmp/nginx-proxy;
+  fastcgi_temp_path     /tmp/nginx-fastcgi;
+  uwsgi_temp_path       /tmp/nginx-uwsgi;
+  scgi_temp_path        /tmp/nginx-scgi;
+
+  sendfile   on;
+  tcp_nopush on;
+
+  # This container is one hop, not two. The platform edge in front of it already
+  # sets these, and Express is configured to trust exactly one proxy — so pass
+  # the edge's values through untouched rather than appending to them. Appending
+  # would make Express read the edge's address as the client and bucket every
+  # visitor together for rate limiting. Fall back to the direct peer when there
+  # is no edge, which is how it runs locally.
+  map $http_x_forwarded_for $fwd_for {
+    default $http_x_forwarded_for;
+    ''      $remote_addr;
+  }
+  map $http_x_forwarded_proto $fwd_proto {
+    default $http_x_forwarded_proto;
+    ''      $scheme;
+  }
+
+  # Websocket/upgrade passthrough. Next only needs it for dev HMR, but a proxy
+  # that silently drops Upgrade is a confusing thing to debug later.
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+  }
+
+  upstream api { server 127.0.0.1:${API_PORT}; keepalive 16; }
+  upstream web { server 127.0.0.1:${WEB_PORT}; keepalive 16; }
+
+  server {
+    listen ${PORT} default_server;
+    server_name _;
+
+    # The API enforces its own per-file limit (MAX_UPLOAD_BYTES) and returns a
+    # structured 413 when it is exceeded. A second, different limit here would
+    # only produce nginx's HTML error page instead.
+    client_max_body_size 0;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $fwd_for;
+    proxy_set_header X-Forwarded-Proto $fwd_proto;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        $connection_upgrade;
+
+    location /api/ {
+      # The point of the whole file: stream the body through instead of
+      # spooling it, so a 500 MB upload costs bandwidth and not memory or disk.
+      proxy_request_buffering off;
+      proxy_buffering         off;
+      # A large upload over a slow connection is not an idle connection.
+      proxy_read_timeout    3600s;
+      proxy_send_timeout    3600s;
+      proxy_pass http://api;
+    }
+
+    location / {
+      # Streamed SSR should reach the browser as it is produced.
+      proxy_buffering off;
+      proxy_pass http://web;
+    }
+  }
+}
