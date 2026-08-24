@@ -763,11 +763,23 @@ takes the container down if either dies so the platform restarts it.
 
 ### 1. Database — Neon (free, permanent, no card)
 
-Create a project at <https://neon.tech>, then copy the pooled connection string.
-That is your `DATABASE_URL`; also set `DATABASE_SSL=true`.
+Create a project at <https://neon.tech>, choose **Postgres 17** (what the test
+suite runs against), then copy the **direct** connection string — the one whose
+host does *not* contain `-pooler`. That is your `DATABASE_URL`; also set
+`DATABASE_SSL=true`.
+
+The direct endpoint matters. Neon's pooled endpoint is PgBouncer in transaction
+mode, where consecutive statements may land on different backends, and
+[`migrate.ts`](apps/api/src/db/migrate.ts) holds a *session*-level
+`pg_advisory_lock` across the transactions it guards. Through the pooler that
+lock would be taken on one backend and released against another: no protection
+against two containers migrating at once, and a leaked lock left behind. The app
+runs its own pool of ten connections, so it has no need of a second pooler.
 
 Free tier is 0.5 GB, which is thousands of files — the *bytes* live in object
-storage, so the database only holds metadata.
+storage, so the database only holds metadata. It scales to zero when idle; the
+first request after a quiet spell pays roughly half a second to wake it, well
+inside the pool's 10 s connect timeout.
 
 ### 2. File storage — pick one
 
