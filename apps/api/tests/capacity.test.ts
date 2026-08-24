@@ -61,6 +61,28 @@ describe('global storage ceiling', () => {
     expect(over.body.error.details.limitBytes).toBe(ceiling.bytes);
   });
 
+  it('is shared across accounts: a fresh signup gets no allowance of its own', async () => {
+    const alice = await newClient().register();
+    ceiling.bytes = (await storedBytes()) + 4096;
+    expect((await alice.upload('alice.bin', Buffer.alloc(4096, 1))).status).toBe(201);
+
+    // Bob has just registered. His own quota is entirely unspent — and that is
+    // irrelevant, because the ceiling is a property of the deployment, not of an
+    // account. This is the case per-account quotas cannot cover: without it,
+    // signing up again is a way to mint another allowance.
+    const bob = await newClient().register();
+    const res = await bob.upload('bob.bin', Buffer.alloc(4096, 2));
+
+    expect(res.status).toBe(507);
+    expect(res.body.error.code).toBe('capacity_reached');
+    // Deliberately not quota_exceeded: Bob has plenty of personal room. The two
+    // codes exist separately so an operator can tell "this user needs more
+    // space" apart from "the service is full".
+    expect(res.body.error.code).not.toBe('quota_exceeded');
+    // The figure it refused against is the whole deployment's, not Bob's.
+    expect(res.body.error.details.storedBytes).toBeGreaterThanOrEqual(4096);
+  });
+
   it('refuses a resumable upload when it is opened, not after it transfers', async () => {
     const client = await newClient().register();
     ceiling.bytes = (await storedBytes()) + 1; // a single byte of headroom

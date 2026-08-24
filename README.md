@@ -81,7 +81,7 @@ deploy; see [Deployment](#deployment).
 | Command | Does |
 | --- | --- |
 | `npm run dev` | Both services with reload |
-| `npm test` | API test suite (107 tests, real Postgres, no mocks) |
+| `npm test` | API test suite (114 tests, real Postgres, no mocks) |
 | `npm run typecheck` | `tsc --noEmit` across both workspaces |
 | `npm run build` | Production build of both |
 | `npm run db:migrate` / `db:reset` / `db:seed` | Schema and demo data |
@@ -644,7 +644,7 @@ a drawer, grid becomes two columns, search moves to its own row) up.
 npm test
 ```
 
-107 tests against a real Postgres database (`basalt_test`, built by the same
+114 tests against a real Postgres database (`basalt_test`, built by the same
 migrations as production) and the real Express app through supertest. No mocked
 database, no mocked storage — uploads are streamed through busboy onto disk and
 read back byte-for-byte, and the resumable tests drive the real chunk protocol.
@@ -826,10 +826,19 @@ DEFAULT_QUOTA_BYTES=1073741824          # 1 GiB per account
 ```
 
 Both are already set in [`render.yaml`](render.yaml). The first is the one that
-matters: per-account quotas cannot bound a bill, because ten accounts at 10 GB
-each is 100 GB. Past the ceiling the API answers `507 capacity_reached` and
-stops accepting uploads — everything already stored still reads, downloads and
-shares normally.
+matters, and the distinction is the whole point: a per-account quota is not a
+bound on anything, because signing up again mints another one. Ten accounts at
+10 GB each is 100 GB. `GLOBAL_STORAGE_LIMIT_BYTES` is measured over every blob
+in the deployment with no owner filter, so a brand-new account with an entirely
+unspent quota is refused just the same once the service is full.
+
+Past the ceiling the API answers `507 capacity_reached` — a separate code from
+`quota_exceeded` precisely so "this user needs more space" and "the service is
+full" are distinguishable — and stops accepting uploads. Everything already
+stored still reads, downloads and shares normally.
+
+Registration is also throttled, at ten accounts per hour per IP, so filling the
+ceiling through mass signup is slow as well as capped.
 
 Why capping *stored bytes* is sufficient for R2 specifically: storage is its only
 billed dimension that accumulates. Egress is free — that is R2's whole selling
