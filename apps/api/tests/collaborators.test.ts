@@ -155,7 +155,7 @@ describe('what a viewer may do', () => {
     expect(listed.status).toBe(200);
     expect(listed.body.total).toBe(1);
 
-    const bytes = await guest.get(`/api/files/${ownerFileId}/content`).buffer(true).parse(binaryParser);
+    const bytes = await guest.get(`/api/files/${ownerFileId}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(bytes.status).toBe(200);
     expect(Buffer.from(bytes.body).toString()).toBe('the owner wrote this');
 
@@ -256,12 +256,12 @@ describe('revoking access', () => {
 
   it('stops reads immediately', async () => {
     const { owner, guest, folderId, ownerFileId } = await shareFolder('editor');
-    expect((await guest.get(`/api/files/${ownerFileId}/content`)).status).toBe(200);
+    expect((await guest.get(`/api/files/${ownerFileId}/content`).redirects(1)).status).toBe(200);
 
     const people = (await owner.get(`/api/collab/folders/${folderId}/people`)).body.people;
     await owner.delete(`/api/collab/folders/${folderId}/people/${people[0].id}`);
 
-    expect((await guest.get(`/api/files/${ownerFileId}/content`)).status).toBe(404);
+    expect((await guest.get(`/api/files/${ownerFileId}/content`).redirects(1)).status).toBe(404);
     expect((await guest.get(`/api/files?scope=folder&folderId=${folderId}`)).body.total).toBe(0);
     expect((await guest.get('/api/files?scope=incoming')).body.total).toBe(0);
   });

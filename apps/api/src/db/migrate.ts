@@ -11,12 +11,23 @@
  *   tsx src/db/migrate.ts reset   drop the public schema, then apply all
  */
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from './client.js';
 
-const DIR = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+/*
+ * Where the .sql files are.
+ *
+ * Next to the compiled output once built (the build copies them in, so the
+ * artefact is self-contained), and next to the source when running through tsx.
+ * Resolving both means a deploy cannot fail on a missing directory that exists
+ * perfectly well in the repository — which is exactly how this went wrong once.
+ */
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CANDIDATES = [join(HERE, 'migrations'), join(HERE, '..', '..', 'src', 'db', 'migrations')];
+const DIR = CANDIDATES.find((candidate) => existsSync(candidate)) ?? CANDIDATES[0]!;
 const LOCK_KEY = 918_273_645; // arbitrary, stable
 
 type Migration = { name: string; sql: string; checksum: string };

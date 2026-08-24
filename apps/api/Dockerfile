@@ -21,8 +21,8 @@ COPY apps/api/package.json apps/api/
 RUN npm ci --omit=dev --workspace @basalt/api --include-workspace-root \
  && npm cache clean --force
 
+# dist already contains the .sql migrations (see build:sql).
 COPY --from=build /repo/apps/api/dist apps/api/dist
-COPY apps/api/src/db/migrations apps/api/src/db/migrations
 
 # Blobs live here when STORAGE_DRIVER=local. Mount a volume, or set
 # STORAGE_DRIVER=s3 and this stays empty.

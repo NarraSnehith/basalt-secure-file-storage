@@ -156,7 +156,7 @@ describe('share receipts', () => {
     const share = (await client.post('/api/shares').send({ fileId: file.id })).body.share;
 
     await anon().get(`/api/s/${share.slug}`);
-    await anon().get(`/api/s/${share.slug}/content`);
+    await anon().get(`/api/s/${share.slug}/content`).redirects(1);
 
     const { body } = await client.get(`/api/shares/${share.id}/receipts`);
     const types = body.receipts.map((r: { type: string }) => r.type);

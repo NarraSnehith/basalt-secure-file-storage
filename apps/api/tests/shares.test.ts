@@ -22,7 +22,7 @@ describe('sharing', () => {
     expect(meta.body.share.file.name).toBe('poster.txt');
     expect(meta.body.share.ownerName).toBe('Test User');
 
-    const bytes = await anon().get(`/api/s/${slug}/content`).buffer(true).parse(binaryParser);
+    const bytes = await anon().get(`/api/s/${slug}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(bytes.status).toBe(200);
     expect(Buffer.from(bytes.body).toString()).toBe('public bytes');
     expect(bytes.headers['content-disposition']).toMatch(/^attachment/);
@@ -40,10 +40,10 @@ describe('sharing', () => {
     const client = await newClient().register();
     const { file } = await publicFile(client);
     const slug = file.publicUrl.split('/f/')[1];
-    expect((await anon().get(`/api/s/${slug}/content`)).status).toBe(200);
+    expect((await anon().get(`/api/s/${slug}/content`).redirects(1)).status).toBe(200);
 
     await client.patch(`/api/files/${file.id}`).send({ visibility: 'private' });
-    expect((await anon().get(`/api/s/${slug}/content`)).status).toBe(404);
+    expect((await anon().get(`/api/s/${slug}/content`).redirects(1)).status).toBe(404);
     expect((await anon().get(`/api/s/${slug}`)).status).toBe(404);
   });
 
@@ -53,7 +53,7 @@ describe('sharing', () => {
     const slug = file.publicUrl.split('/f/')[1];
 
     await client.delete(`/api/files/${file.id}`);
-    expect((await anon().get(`/api/s/${slug}/content`)).status).toBe(404);
+    expect((await anon().get(`/api/s/${slug}/content`).redirects(1)).status).toBe(404);
   });
 
   it('hides even the filename behind a password, and lets a grant through', async () => {
@@ -67,7 +67,7 @@ describe('sharing', () => {
     expect(locked.body.share.requiresPassword).toBe(true);
     expect(locked.body.share.file).toBeUndefined();
 
-    expect((await anon().get(`/api/s/${share.slug}/content`)).status).toBe(401);
+    expect((await anon().get(`/api/s/${share.slug}/content`).redirects(1)).status).toBe(401);
 
     const wrong = await anon().post(`/api/s/${share.slug}/unlock`).send({ password: 'wrong-one' });
     expect(wrong.status).toBe(403);
@@ -76,9 +76,9 @@ describe('sharing', () => {
     expect(unlock.status).toBe(200);
 
     const withGrant = await anon()
-      .get(`/api/s/${share.slug}/content`)
+      .get(`/api/s/${share.slug}/content`).redirects(1)
       .set('X-Share-Grant', unlock.body.grant)
-      .buffer(true).parse(binaryParser);
+      .redirects(1).buffer(true).parse(binaryParser);
     expect(withGrant.status).toBe(200);
     expect(Buffer.from(withGrant.body).toString()).toBe('confidential');
   });
@@ -91,7 +91,7 @@ describe('sharing', () => {
     const shareB = (await client.post('/api/shares').send({ fileId: b.id, password: 'password-two' })).body.share;
 
     const grantA = (await anon().post(`/api/s/${shareA.slug}/unlock`).send({ password: 'password-one' })).body.grant;
-    const crossUse = await anon().get(`/api/s/${shareB.slug}/content`).set('X-Share-Grant', grantA);
+    const crossUse = await anon().get(`/api/s/${shareB.slug}/content`).redirects(1).set('X-Share-Grant', grantA);
     expect(crossUse.status).toBe(401);
   });
 
@@ -100,8 +100,8 @@ describe('sharing', () => {
     const file = (await client.upload('limited.txt', 'one shot')).body.files[0];
     const share = (await client.post('/api/shares').send({ fileId: file.id, maxDownloads: 1 })).body.share;
 
-    expect((await anon().get(`/api/s/${share.slug}/content`)).status).toBe(200);
-    const second = await anon().get(`/api/s/${share.slug}/content`);
+    expect((await anon().get(`/api/s/${share.slug}/content`).redirects(1)).status).toBe(200);
+    const second = await anon().get(`/api/s/${share.slug}/content`).redirects(1);
     expect(second.status).toBe(410);
     expect(second.body.error.code).toBe('share_exhausted');
   });
@@ -128,8 +128,8 @@ describe('sharing', () => {
     const file = (await client.upload('view.txt', 'no peeking', { contentType: 'text/plain' })).body.files[0];
     const share = (await client.post('/api/shares').send({ fileId: file.id, allowPreview: false })).body.share;
 
-    expect((await anon().get(`/api/s/${share.slug}/content?disposition=inline`)).status).toBe(403);
-    expect((await anon().get(`/api/s/${share.slug}/content`)).status).toBe(200);
+    expect((await anon().get(`/api/s/${share.slug}/content?disposition=inline`).redirects(1)).status).toBe(403);
+    expect((await anon().get(`/api/s/${share.slug}/content`).redirects(1)).status).toBe(200);
   });
 
   it('only lets the owner manage a link', async () => {
@@ -148,7 +148,7 @@ describe('sharing', () => {
     const client = await newClient().register();
     const { file } = await publicFile(client, 'audited.txt', 'watch me');
     const slug = file.publicUrl.split('/f/')[1];
-    await anon().get(`/api/s/${slug}/content`);
+    await anon().get(`/api/s/${slug}/content`).redirects(1);
 
     const feed = await client.get('/api/activity?limit=50');
     const types = feed.body.items.map((e: { type: string }) => e.type);

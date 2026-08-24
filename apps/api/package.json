@@ -6,14 +6,15 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/server.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && npm run build:sql",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx src/db/migrate.ts up",
     "db:reset": "tsx src/db/migrate.ts reset",
     "db:seed": "tsx src/db/seed.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:sql": "node -e \"require('node:fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",

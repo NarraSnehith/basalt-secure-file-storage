@@ -55,6 +55,10 @@ const schema = z
     S3_ACCESS_KEY_ID: z.string().optional(),
     S3_SECRET_ACCESS_KEY: z.string().optional(),
     S3_FORCE_PATH_STYLE: bool(false),
+    // Both unset by default — see the note in storage/s3.ts. Set S3_ACL=private
+    // only for a bucket that still has ACLs enabled.
+    S3_ACL: z.string().optional(),
+    S3_SSE: z.string().optional(),
 
     MAX_UPLOAD_BYTES: bytes(512 * 1024 * 1024),
     DEFAULT_QUOTA_BYTES: bytes(10 * 1024 * 1024 * 1024),
@@ -79,7 +83,27 @@ const schema = z
     }
   });
 
-const parsed = schema.safeParse(process.env);
+/**
+ * The public origin, without making you paste it in twice.
+ *
+ * WEB_ORIGIN drives CORS, cookie scope and the URLs written into share links,
+ * so it has to be the address people actually visit. Every host already tells
+ * us that in its own variable, and reading it here removes the single most
+ * common deployment mistake: a service that boots fine and then refuses every
+ * request with "Origin not allowed".
+ */
+function inferWebOrigin(): string | undefined {
+  const env = process.env;
+  if (env.WEB_ORIGIN) return env.WEB_ORIGIN;
+  if (env.RENDER_EXTERNAL_URL) return env.RENDER_EXTERNAL_URL;
+  if (env.KOYEB_PUBLIC_DOMAIN) return `https://${env.KOYEB_PUBLIC_DOMAIN}`;
+  if (env.FLY_APP_NAME) return `https://${env.FLY_APP_NAME}.fly.dev`;
+  if (env.RAILWAY_PUBLIC_DOMAIN) return `https://${env.RAILWAY_PUBLIC_DOMAIN}`;
+  if (env.VERCEL_URL) return `https://${env.VERCEL_URL}`;
+  return undefined;
+}
+
+const parsed = schema.safeParse({ ...process.env, WEB_ORIGIN: inferWebOrigin() });
 
 if (!parsed.success) {
   const issues = parsed.error.issues

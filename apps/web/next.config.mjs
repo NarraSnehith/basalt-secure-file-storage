@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { NextConfig } from 'next';
 
 /**
  * One .env at the repository root configures both services, so this reads it
@@ -9,14 +8,24 @@ import type { NextConfig } from 'next';
 const rootEnv = resolve(process.cwd(), '../../.env');
 if (existsSync(rootEnv)) {
   // Loaded lazily: dotenv is a dev dependency of the API workspace.
-  const dotenv = require('dotenv') as typeof import('dotenv');
-  dotenv.config({ path: rootEnv, override: false });
+  const { config } = await import('dotenv');
+  config({ path: rootEnv, override: false });
 }
 
 const API_ORIGIN = process.env.API_ORIGIN ?? `http://localhost:${process.env.API_PORT ?? 4000}`;
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
 
-const nextConfig: NextConfig = {
+/**
+ * Plain JavaScript on purpose.
+ *
+ * Next reads this file at *runtime*, and a .ts config makes it install
+ * TypeScript on boot when the production image has no dev dependencies —
+ * needing network access and a writable node_modules just to start. JSDoc keeps
+ * the editor types.
+ *
+ * @type {import('next').NextConfig}
+ */
+const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
 

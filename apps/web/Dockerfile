@@ -25,7 +25,7 @@ RUN npm ci --omit=dev --workspace @basalt/web --include-workspace-root \
 
 COPY --from=build /repo/apps/web/.next apps/web/.next
 COPY --from=build /repo/apps/web/public apps/web/public
-COPY apps/web/next.config.ts apps/web/
+COPY apps/web/next.config.mjs apps/web/
 
 USER node
 WORKDIR /repo/apps/web

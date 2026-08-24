@@ -49,7 +49,7 @@ describe('resumable uploads', () => {
     expect(file.sizeBytes).toBe(contents.length);
     expect(file.checksum).toBe(sha256(contents));
 
-    const downloaded = await client.get(`/api/files/${file.id}/content`).buffer(true).parse(binaryParser);
+    const downloaded = await client.get(`/api/files/${file.id}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(Buffer.from(downloaded.body).equals(contents)).toBe(true);
   });
 
@@ -74,7 +74,7 @@ describe('resumable uploads', () => {
     expect(finished.status).toBe(201);
 
     const downloaded = await client
-      .get(`/api/files/${finished.body.file.id}/content`)
+      .get(`/api/files/${finished.body.file.id}/content`).redirects(1)
       .buffer(true)
       .parse(binaryParser);
     expect(Buffer.from(downloaded.body).equals(contents)).toBe(true);
@@ -234,7 +234,7 @@ describe('content addressing', () => {
     await client.delete(`/api/files/${drop.id}`);
     expect((await client.post('/api/files/actions/purge').send({ ids: [drop.id] })).body.purged).toBe(1);
 
-    const downloaded = await client.get(`/api/files/${keep.id}/content`).buffer(true).parse(binaryParser);
+    const downloaded = await client.get(`/api/files/${keep.id}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(downloaded.status).toBe(200);
     expect(Buffer.from(downloaded.body).equals(contents)).toBe(true);
 
@@ -261,7 +261,7 @@ describe('content addressing', () => {
     expect((await client.get('/api/uploads')).body.sessions).toHaveLength(0);
 
     const downloaded = await client
-      .get(`/api/files/${opened.body.file.id}/content`)
+      .get(`/api/files/${opened.body.file.id}/content`).redirects(1)
       .buffer(true)
       .parse(binaryParser);
     expect(Buffer.from(downloaded.body).equals(contents)).toBe(true);
@@ -317,10 +317,10 @@ describe('version history', () => {
     expect(body.versions.map((v: { version: number }) => v.version)).toEqual([3, 2, 1]);
     expect(body.versions[0].current).toBe(true);
 
-    const old = await client.get(`/api/files/${file.id}/content?version=1`).buffer(true).parse(binaryParser);
+    const old = await client.get(`/api/files/${file.id}/content?version=1`).redirects(1).buffer(true).parse(binaryParser);
     expect(Buffer.from(old.body).toString()).toBe('v1 contents');
 
-    const current = await client.get(`/api/files/${file.id}/content`).buffer(true).parse(binaryParser);
+    const current = await client.get(`/api/files/${file.id}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(Buffer.from(current.body).toString()).toBe('v3 contents');
   });
 
@@ -334,11 +334,11 @@ describe('version history', () => {
     expect(restored.body.file.version).toBe(3); // appended, not rewound
     expect(restored.body.file.versionCount).toBe(3);
 
-    const now = await client.get(`/api/files/${file.id}/content`).buffer(true).parse(binaryParser);
+    const now = await client.get(`/api/files/${file.id}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(Buffer.from(now.body).toString()).toBe('the good one');
 
     // The regrettable one is still there to go back to.
-    const two = await client.get(`/api/files/${file.id}/content?version=2`).buffer(true).parse(binaryParser);
+    const two = await client.get(`/api/files/${file.id}/content?version=2`).redirects(1).buffer(true).parse(binaryParser);
     expect(Buffer.from(two.body).toString()).toBe('the regrettable one');
   });
 
@@ -382,7 +382,7 @@ describe('version history', () => {
   it('answers 404 for a version that does not exist', async () => {
     const client = await newClient().register();
     const file = (await client.upload('single.txt', 'only one', { contentType: 'text/plain' })).body.files[0];
-    expect((await client.get(`/api/files/${file.id}/content?version=7`)).status).toBe(404);
+    expect((await client.get(`/api/files/${file.id}/content?version=7`).redirects(1)).status).toBe(404);
     expect((await client.post(`/api/files/${file.id}/versions/7/restore`)).status).toBe(404);
   });
 
@@ -395,6 +395,6 @@ describe('version history', () => {
     expect((await other.get(`/api/files/${file.id}/versions`)).status).toBe(404);
     expect((await other.post(`/api/files/${file.id}/versions/1/restore`)).status).toBe(404);
     expect((await other.delete(`/api/files/${file.id}/versions/1`)).status).toBe(404);
-    expect((await other.get(`/api/files/${file.id}/content?version=1`)).status).toBe(404);
+    expect((await other.get(`/api/files/${file.id}/content?version=1`).redirects(1)).status).toBe(404);
   });
 });

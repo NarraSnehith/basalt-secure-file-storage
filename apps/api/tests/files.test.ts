@@ -34,7 +34,7 @@ describe('file storage', () => {
   it('serves the bytes back byte-for-byte', async () => {
     const client = await newClient().register();
     const file = await withFile(client, 'exact.bin', 'the-precise-bytes');
-    const res = await client.get(`/api/files/${file.id}/content`).buffer(true).parse(binaryParser);
+    const res = await client.get(`/api/files/${file.id}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(res.status).toBe(200);
     expect(Buffer.from(res.body).toString()).toBe('the-precise-bytes');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
@@ -61,9 +61,26 @@ describe('file storage', () => {
   it('forces a download for anything that could execute in the browser', async () => {
     const client = await newClient().register();
     const file = await withFile(client, 'xss.html', '<script>alert(1)</script>');
-    const res = await client.get(`/api/files/${file.id}/content?disposition=inline`);
+
+    // The invariant, whichever driver is serving: this never renders.
+    const res = await client.get(`/api/files/${file.id}/content?disposition=inline`).redirects(1);
     expect(res.headers['content-disposition']).toMatch(/^attachment/);
-    expect(res.headers['content-security-policy']).toContain('sandbox');
+
+    /*
+     * The sandboxing CSP is added by *our* response, so it is only present when
+     * we are the ones sending the bytes. An object-store driver answers with a
+     * presigned redirect, and a presigned URL can only pin the response headers
+     * S3 defines — disposition and content type among them, arbitrary security
+     * headers not. The defence there is different rather than absent: the
+     * disposition is signed into the URL, and the bytes are served from the
+     * bucket's origin, not ours, so nothing rendered could touch this app's
+     * cookies or DOM anyway.
+     */
+    const servedByUs = !res.redirects || res.redirects.length === 0;
+    if (servedByUs) {
+      expect(res.headers['content-security-policy']).toContain('sandbox');
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+    }
   });
 
   it('strips path traversal out of the filename', async () => {
@@ -104,7 +121,7 @@ describe('file storage', () => {
     expect(second.version).toBe(2);
     expect((await client.get('/api/files?scope=all')).body.total).toBe(1);
 
-    const body = await client.get(`/api/files/${first.id}/content`).buffer(true).parse(binaryParser);
+    const body = await client.get(`/api/files/${first.id}/content`).redirects(1).buffer(true).parse(binaryParser);
     expect(Buffer.from(body.body).toString()).toBe('draft two');
   });
 
@@ -124,7 +141,7 @@ describe('file storage', () => {
 
     const probes = [
       () => other.get(`/api/files/${file.id}`),
-      () => other.get(`/api/files/${file.id}/content`),
+      () => other.get(`/api/files/${file.id}/content`).redirects(1),
       () => other.patch(`/api/files/${file.id}`).send({ name: 'stolen.txt' }),
       () => other.delete(`/api/files/${file.id}`),
       () => other.post('/api/shares').send({ fileId: file.id }),
@@ -142,14 +159,14 @@ describe('file storage', () => {
     const owner = await newClient().register();
     const file = await withFile(owner);
     expect((await anon().get(`/api/files/${file.id}`)).status).toBe(401);
-    expect((await anon().get(`/api/files/${file.id}/content`)).status).toBe(401);
+    expect((await anon().get(`/api/files/${file.id}/content`).redirects(1)).status).toBe(401);
     expect((await anon().get('/api/files')).status).toBe(401);
   });
 
   it('supports byte ranges so media can seek', async () => {
     const client = await newClient().register();
     const file = await withFile(client, 'clip.txt', 'abcdefghijklmnopqrstuvwxyz');
-    const res = await client.get(`/api/files/${file.id}/content`).set('Range', 'bytes=3-7').buffer(true).parse(binaryParser);
+    const res = await client.get(`/api/files/${file.id}/content`).redirects(1).set('Range', 'bytes=3-7').redirects(1).buffer(true).parse(binaryParser);
     expect(res.status).toBe(206);
     expect(res.headers['content-range']).toBe('bytes 3-7/26');
     expect(Buffer.from(res.body).toString()).toBe('defgh');
@@ -158,8 +175,8 @@ describe('file storage', () => {
   it('answers a conditional request with 304', async () => {
     const client = await newClient().register();
     const file = await withFile(client);
-    const first = await client.get(`/api/files/${file.id}/content`);
-    const again = await client.get(`/api/files/${file.id}/content`).set('If-None-Match', String(first.headers.etag));
+    const first = await client.get(`/api/files/${file.id}/content`).redirects(1);
+    const again = await client.get(`/api/files/${file.id}/content`).redirects(1).set('If-None-Match', String(first.headers.etag));
     expect(again.status).toBe(304);
   });
 

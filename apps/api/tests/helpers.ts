@@ -198,6 +198,16 @@ export const newClient = () => new Client();
  * superagent parses text/* into `res.text`; for byte-exact assertions we want
  * the raw buffer, so download tests attach this parser explicitly.
  */
+/**
+ * Downloads must be read with `.redirects(1)`.
+ *
+ * The local driver streams the bytes itself; an object-store driver answers with
+ * a 302 to a short-lived presigned URL so the bytes never occupy an API process.
+ * Both are correct, so the assertions follow the redirect and the same suite
+ * validates either backend:
+ *
+ *   STORAGE_DRIVER=s3 S3_BUCKET=… S3_ENDPOINT=… npm test
+ */
 export function binaryParser(res: unknown, cb: (err: Error | null, body: Buffer) => void): void {
   const stream = res as NodeJS.ReadableStream;
   const chunks: Buffer[] = [];
