@@ -7,6 +7,10 @@ Built as a full-stack engineering exercise. Two services in one repository — a
 TypeScript/Express API over PostgreSQL, and a Next.js front end — with no
 component library, no UI kit, and no generated boilerplate.
 
+**Live demo:** <https://pennsylvania-passing-chuck-hand.trycloudflare.com>
+Sign in with the demo button. (A tunnel to a development machine, so it is up
+only while that machine is — see [Deployment](#deployment) for a permanent one.)
+
 ```
 demo account   demo@basalt.build / stone-and-ash-2026
                (the sign-in page has a one-click button for it)
