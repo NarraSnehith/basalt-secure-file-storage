@@ -12,7 +12,7 @@ import { Wordmark } from '@/components/brand/Logo';
 import { Menu } from '@/components/ui/Menu';
 import { Modal } from '@/components/ui/Modal';
 import {
-  IconActivity, IconClock, IconDrive, IconFolder, IconPlus, IconSettings,
+  IconActivity, IconClock, IconDrive, IconFilter, IconFolder, IconPlus, IconSettings,
   IconShare, IconStar, IconTrash, IconUpload,
 } from '@/components/ui/icons';
 import { StorageCore } from './StorageCore';
@@ -24,6 +24,8 @@ const NAV = [
   { href: '/vault/recent', label: 'Recent', icon: IconClock },
   { href: '/vault/starred', label: 'Starred', icon: IconStar },
   { href: '/vault/shared', label: 'Shared', icon: IconShare },
+  { href: '/vault/requests', label: 'Upload links', icon: IconUpload },
+  { href: '/vault/insights', label: 'Insights', icon: IconFilter },
   { href: '/vault/activity', label: 'Activity', icon: IconActivity },
   { href: '/vault/trash', label: 'Trash', icon: IconTrash },
 ] as const;

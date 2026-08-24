@@ -48,8 +48,20 @@ export function createApp(): Express {
         return allowed.includes(origin) ? cb(null, true) : cb(new AppError('forbidden', 'Origin not allowed.'));
       },
       credentials: true,
-      methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'X-Share-Grant', 'X-Request-Id', 'Authorization', 'Range', 'If-None-Match'],
+      // PUT carries upload chunks; the grant headers carry proof that a
+      // password-protected share or upload link was unlocked.
+      methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: [
+        'Content-Type',
+        'X-CSRF-Token',
+        'X-Share-Grant',
+        'X-Request-Grant',
+        'X-Chunk-Sha256',
+        'X-Request-Id',
+        'Authorization',
+        'Range',
+        'If-None-Match',
+      ],
       exposedHeaders: ['X-Request-Id', 'Content-Range', 'Accept-Ranges', 'RateLimit-Remaining', 'RateLimit-Reset', 'Retry-After'],
       maxAge: 600,
     }),

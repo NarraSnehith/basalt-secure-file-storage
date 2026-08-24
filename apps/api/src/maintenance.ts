@@ -4,6 +4,7 @@ import { db } from './db/client.js';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { pruneSessions } from './modules/auth/service.js';
+import { reindexPending } from './modules/files/ingest.js';
 import { releaseUnreferencedBlobs } from './modules/files/service.js';
 import { abandonSession } from './modules/uploads/service.js';
 import { storage } from './storage/index.js';
@@ -133,7 +134,7 @@ export async function expireUploadSessions(): Promise<number> {
 }
 
 export async function runMaintenance(): Promise<void> {
-  const [purged, sessions, uploads, released, orphans, spool] = await Promise.all([
+  const [purged, sessions, uploads, released, orphans, spool, indexed] = await Promise.all([
     purgeExpiredTrash().catch((err) => {
       logger.error({ err }, 'trash purge failed');
       return 0;
@@ -143,8 +144,9 @@ export async function runMaintenance(): Promise<void> {
     releaseUnreferencedBlobs().catch(() => 0),
     sweepOrphanBlobs().catch(() => 0),
     sweepSpool().catch(() => 0),
+    reindexPending().catch(() => 0),
   ]);
-  logger.debug({ purged, sessions, uploads, released, orphans, spool }, 'maintenance pass complete');
+  logger.debug({ purged, sessions, uploads, released, orphans, spool, indexed }, 'maintenance pass complete');
 }
 
 export function startMaintenanceLoop(intervalMs = 6 * 3_600_000): NodeJS.Timeout {

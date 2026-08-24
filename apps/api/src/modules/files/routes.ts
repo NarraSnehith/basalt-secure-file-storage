@@ -246,8 +246,9 @@ const serveOwn = route(async (req, res) => {
   const blob = await resolveOwnDownload(req.auth!.user.id, id, version);
   await streamBlob(req, res, blob, { wants: disposition, isPublic: false });
 
-  // Count a download once per full transfer, and never for a range probe.
-  if (req.method === 'GET' && !req.get('range')) {
+  // Count a download once per full transfer — never for a range probe, and
+  // never for an inline preview, which is looking rather than taking.
+  if (req.method === 'GET' && !req.get('range') && disposition !== 'inline') {
     await registerDownload(id);
     await recordEvent({ type: 'file.download', actorId: req.auth!.user.id, fileId: id, subject: blob.name, req });
   }

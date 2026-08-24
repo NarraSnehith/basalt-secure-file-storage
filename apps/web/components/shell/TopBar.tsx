@@ -17,6 +17,8 @@ const SCOPE_TITLE: Record<string, { title: string; blurb: string }> = {
   shared: { title: 'Shared', blurb: 'Files reachable by anyone holding a link.' },
   trash: { title: 'Trash', blurb: 'Recoverable for 30 days, then removed for good.' },
   activity: { title: 'Activity', blurb: 'Every action on your account, newest first.' },
+  requests: { title: 'Upload links', blurb: 'Let other people send files into your folders.' },
+  insights: { title: 'Insights', blurb: 'What is using your space, and what you could reclaim.' },
   settings: { title: 'Settings', blurb: 'Profile, password, devices and storage.' },
 };
 

@@ -622,27 +622,60 @@ export interface StorageStats {
  * distributed across file families, largest layer first.
  */
 export async function storageStats(user: UserRow): Promise<StorageStats> {
-  const [strata, trash, folders, publics, versionOverhead, savings] = await Promise.all([
+  const [strata, counts, trash, folders, publics, versionOverhead, savings] = await Promise.all([
+    /*
+     * Composition of the bytes actually on disk.
+     *
+     * Grouping by SUM(files.size_bytes) would double-count a de-duplicated
+     * copy and make the legend add up to more than the account uses, so each
+     * blob is counted once and attributed to the kind of the oldest file
+     * pointing at it.
+     */
     db
-      .selectFrom('files')
+      .selectFrom(
+        db
+          .selectFrom('blobs')
+          .innerJoin('files', 'files.blob_id', 'blobs.id')
+          .select(({ fn }) => [
+            'blobs.id as blob_id',
+            'blobs.size_bytes as size_bytes',
+            fn
+              .agg<string>('min', [sql`files.kind`])
+              .over((ob) => ob.partitionBy('blobs.id'))
+              .as('kind'),
+          ])
+          .distinctOn('blobs.id')
+          .where('blobs.owner_id', '=', user.id)
+          .where('blobs.ref_count', '>', 0)
+          .where('files.deleted_at', 'is', null)
+          .as('live'),
+      )
       .select(['kind', sql<string>`sum(size_bytes)`.as('bytes'), sql<string>`count(*)`.as('count')])
-      .where('owner_id', '=', user.id)
-      .where('deleted_at', 'is', null)
       .groupBy('kind')
       .orderBy(sql`sum(size_bytes)`, 'desc')
       .execute(),
+
+    db
+      .selectFrom('files')
+      .select(sql<string>`count(*)`.as('count'))
+      .where('owner_id', '=', user.id)
+      .where('deleted_at', 'is', null)
+      .executeTakeFirst(),
+
     db
       .selectFrom('files')
       .select([sql<string>`coalesce(sum(size_bytes),0)`.as('bytes'), sql<string>`count(*)`.as('count')])
       .where('owner_id', '=', user.id)
       .where('deleted_at', 'is not', null)
       .executeTakeFirst(),
+
     db
       .selectFrom('folders')
       .select(sql<string>`count(*)`.as('count'))
       .where('owner_id', '=', user.id)
       .where('deleted_at', 'is', null)
       .executeTakeFirst(),
+
     db
       .selectFrom('files')
       .select(sql<string>`count(*)`.as('count'))
@@ -650,7 +683,8 @@ export async function storageStats(user: UserRow): Promise<StorageStats> {
       .where('deleted_at', 'is', null)
       .where('visibility', '=', 'public')
       .executeTakeFirst(),
-    // Superseded revisions: blobs referenced by a version that is not current.
+
+    // Superseded revisions: blobs held by a version that is no longer current.
     db
       .selectFrom('file_versions')
       .innerJoin('files', 'files.id', 'file_versions.file_id')
@@ -659,6 +693,7 @@ export async function storageStats(user: UserRow): Promise<StorageStats> {
       .where('files.owner_id', '=', user.id)
       .whereRef('file_versions.blob_id', '<>', 'files.blob_id')
       .executeTakeFirst(),
+
     // What the same content would have cost stored once per reference.
     db
       .selectFrom('blobs')
@@ -674,7 +709,7 @@ export async function storageStats(user: UserRow): Promise<StorageStats> {
     quotaBytes: Number(user.quota_bytes),
     usedBytes: Number(user.storage_used_bytes),
     trashBytes: Number(trash?.bytes ?? 0),
-    fileCount: strata.reduce((n, s) => n + Number(s.count), 0),
+    fileCount: Number(counts?.count ?? 0),
     folderCount: Number(folders?.count ?? 0),
     publicCount: Number(publics?.count ?? 0),
     strata: strata.map((s) => ({ kind: s.kind, bytes: Number(s.bytes), count: Number(s.count) })),
@@ -683,3 +718,4 @@ export async function storageStats(user: UserRow): Promise<StorageStats> {
     unreferencedBytes: Number(savings?.unreferenced ?? 0),
   };
 }
+

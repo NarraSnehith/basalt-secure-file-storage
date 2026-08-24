@@ -14,7 +14,7 @@ import {
 import { api, ApiError } from './api';
 import { useDebounced, useStoredState } from './hooks';
 import { useToast } from './toast';
-import { UploadManager, type Transfer } from './upload-manager';
+import { UploadManager, type ServerSession, type Transfer } from './upload-manager';
 import type { FileListResponse, Folder, ShareLink, StorageStats, StoredFile } from './types';
 
 /**
@@ -67,6 +67,10 @@ interface VaultValue {
   upload: (files: File[], opts?: { folderId?: string | null; visibility?: 'private' | 'public' }) => void;
   cancelTransfer: (id: string) => void;
   retryTransfer: (id: string) => void;
+  pauseTransfer: (id: string) => void;
+  resumeTransfer: (id: string) => void;
+  /** Hand a re-picked file back to a session that survived a reload. */
+  attachTransferFile: (id: string, file: File) => boolean;
   dismissTransfer: (id: string) => void;
   clearFinishedTransfers: () => void;
 
@@ -246,9 +250,17 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const managerRef = useRef<UploadManager | null>(null);
   managerRef.current ??= new UploadManager({
     maxBytes: MAX_UPLOAD_BYTES,
-    concurrency: 3,
+    concurrency: 2,
+    chunkConcurrency: 3,
     onChange: setTransfers,
-    onUploaded: (uploaded) => {
+    onUploaded: (uploaded, meta) => {
+      // A new version replaces a row rather than adding one, so the simplest
+      // correct answer is to re-read the view it landed in.
+      if (meta.versioned) {
+        void loadFiles();
+        void loadStats();
+        return;
+      }
       setFiles((current) => {
         // Only splice in files that belong to the view being looked at.
         const relevant = uploaded.filter(
@@ -264,6 +276,25 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     },
     onQuotaChanged: () => void loadStats(),
   });
+
+  /**
+   * On load, ask the server whether it is still holding any unfinished uploads
+   * for this account and offer to finish them. This is the payoff for keeping
+   * upload state on the server: closing the tab no longer throws the transfer
+   * away.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .get<{ sessions: ServerSession[] }>('/uploads')
+      .then((data) => {
+        if (!cancelled && data.sessions.length) managerRef.current!.adopt(data.sessions);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // The manager outlives renders, so it reads the current route through refs.
   const scopeRef = useRef(scope);
@@ -521,6 +552,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       upload,
       cancelTransfer: (id) => managerRef.current!.cancel(id),
       retryTransfer: (id) => managerRef.current!.retry(id),
+      pauseTransfer: (id) => managerRef.current!.pause(id),
+      resumeTransfer: (id) => managerRef.current!.resume(id),
+      attachTransferFile: (id, file) => managerRef.current!.attachFile(id, file),
       dismissTransfer: (id) => managerRef.current!.dismiss(id),
       clearFinishedTransfers: () => managerRef.current!.clearFinished(),
       refresh,

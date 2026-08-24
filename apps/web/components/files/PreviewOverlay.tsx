@@ -12,6 +12,7 @@ import {
 import type { StoredFile } from '@/lib/types';
 import { Badges } from './Badges';
 import { KindGlyph, ExtensionChip } from './KindGlyph';
+import { VersionHistory } from './VersionHistory';
 
 /**
  * Full-screen preview.
@@ -130,6 +131,10 @@ export function PreviewOverlay({
             <Detail label="Added" value={formatDateTime(current.createdAt)} />
             <Detail label="Modified" value={relativeTime(current.updatedAt)} />
             <Detail label="Downloads" value={String(current.downloadCount)} />
+            {current.versionCount > 1 ? (
+              <Detail label="Revision" value={`${current.version} of ${current.versionCount}`} />
+            ) : null}
+            {current.searchable ? <Detail label="Indexed" value="Contents are searchable" /> : null}
             <Detail label="Visibility" value={current.visibility === 'public' ? `Public · ${current.shareCount} link${current.shareCount === 1 ? '' : 's'}` : 'Private'} />
             <div>
               <dt className="label mb-1">SHA-256</dt>
@@ -146,6 +151,15 @@ export function PreviewOverlay({
               </dd>
             </div>
           </dl>
+
+          {current.versionCount > 1 ? (
+            <div className="mt-5">
+              <p className="eyebrow mb-1">
+                History · {current.versionCount} revisions
+              </p>
+              <VersionHistory file={current} />
+            </div>
+          ) : null}
 
           {current.publicUrl ? (
             <div className="mt-4 rounded-md p-2.5" style={{ background: 'var(--accent-wash)', border: '1px solid color-mix(in oklab, var(--accent) 22%, transparent)' }}>
@@ -180,7 +194,9 @@ function Detail({ label, value, tone }: { label: string; value: string; tone?: '
 }
 
 function PreviewBody({ file, mode }: { file: StoredFile; mode: ReturnType<typeof previewMode> }) {
-  const inline = fileContentUrl(file.id, 'inline');
+  // The revision is part of the URL so restoring an older one re-fetches
+  // instead of showing whatever the browser still had cached.
+  const inline = `${fileContentUrl(file.id, 'inline')}&r=${file.version}`;
 
   if (mode === 'image') {
     // eslint-disable-next-line @next/next/no-img-element
@@ -237,7 +253,8 @@ function TextPreview({ url }: { url: string }) {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(url, { credentials: 'same-origin' });
+        // 'include', because the API may be on a different port than the app.
+        const res = await fetch(url, { credentials: 'include' });
         if (!res.ok) throw new Error(String(res.status));
         const body = await res.text();
         if (!cancelled) {

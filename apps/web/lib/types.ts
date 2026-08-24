@@ -25,6 +25,12 @@ export interface StoredFile {
   starred: boolean;
   downloadCount: number;
   previewable: boolean;
+  version: number;
+  versionCount: number;
+  /** Set when the file arrived through a request link rather than the owner. */
+  requestId: string | null;
+  /** True once the contents were read into the search index. */
+  searchable: boolean;
   createdAt: string;
   updatedAt: string;
   lastAccessedAt: string | null;
@@ -73,6 +79,87 @@ export interface StorageStats {
   folderCount: number;
   publicCount: number;
   strata: Array<{ kind: string; bytes: number; count: number }>;
+  /** Bytes held by revisions that are no longer current. */
+  versionBytes: number;
+  /** What content addressing has saved this account. */
+  dedupSavedBytes: number;
+  unreferencedBytes: number;
+}
+
+export interface FileVersion {
+  id: string;
+  version: number;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string;
+  source: 'upload' | 'request' | 'restore';
+  note: string | null;
+  createdAt: string;
+  current: boolean;
+  /** These exact bytes are referenced somewhere else too. */
+  shared: boolean;
+}
+
+export interface FileRequest {
+  id: string;
+  slug: string;
+  url: string;
+  title: string;
+  message: string | null;
+  folderId: string;
+  folderName: string | null;
+  hasPassword: boolean;
+  maxFiles: number | null;
+  maxBytes: number | null;
+  expiresAt: string | null;
+  submissionCount: number;
+  receivedBytes: number;
+  remainingFiles: number | null;
+  remainingBytes: number | null;
+  expired: boolean;
+  full: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export interface RequestSubmission {
+  id: string;
+  fileId: string | null;
+  filename: string;
+  sizeBytes: number;
+  submitter: string | null;
+  ip: string | null;
+  createdAt: string;
+  present: boolean;
+}
+
+export interface ShareReceipt {
+  id: string;
+  type: 'share.view' | 'share.download' | 'share.denied' | string;
+  createdAt: string;
+  ip: string | null;
+  userAgent: string | null;
+  anonymous: boolean;
+}
+
+export interface Insights {
+  largest: Array<{ id: string; name: string; kind: string; sizeBytes: number; createdAt: string }>;
+  duplicates: Array<{
+    checksum: string;
+    sizeBytes: number;
+    files: Array<{ id: string; name: string; folderId: string | null; createdAt: string }>;
+    wastedBytes: number;
+  }>;
+  stale: Array<{ id: string; name: string; sizeBytes: number; createdAt: string; lastAccessedAt: string | null }>;
+  versionHeavy: Array<{ id: string; name: string; versionCount: number; historyBytes: number }>;
+  reclaimable: {
+    trashBytes: number;
+    trashCount: number;
+    versionBytes: number;
+    unreferencedBytes: number;
+  };
+  dedupSavedBytes: number;
 }
 
 export interface ActivityEvent {

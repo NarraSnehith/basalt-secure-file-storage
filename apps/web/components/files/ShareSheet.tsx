@@ -11,7 +11,7 @@ import { Switch } from '@/components/ui/Switch';
 import {
   IconCheck, IconClose, IconEye, IconGlobe, IconLink, IconLock, IconPlus, IconSpinner, IconTrash,
 } from '@/components/ui/icons';
-import type { ShareLink, StoredFile } from '@/lib/types';
+import type { ShareLink, ShareReceipt, StoredFile } from '@/lib/types';
 
 const EXPIRY_PRESETS = [
   { label: 'Never', hours: null },
@@ -157,7 +157,7 @@ export function ShareSheet({ file: snapshot, onClose }: { file: StoredFile; onCl
 
       <p className="mt-5 flex items-start gap-2 text-[0.75rem] leading-relaxed" style={{ color: 'var(--text-faint)' }}>
         <IconEye size={13} className="mt-px shrink-0" />
-        Every visit and download is recorded against your account, with time and IP, under Activity.
+        Every visit and download is recorded. Open a link’s receipts to see who has been.
       </p>
     </Modal>
   );
@@ -165,7 +165,20 @@ export function ShareSheet({ file: snapshot, onClose }: { file: StoredFile; onCl
 
 function LinkRow({ share, onRevoke, detailed }: { share: ShareLink; onRevoke: () => void; detailed?: boolean }) {
   const [copied, copy] = useCopy();
+  const [receipts, setReceipts] = useState<ShareReceipt[] | null>(null);
+  const [showReceipts, setShowReceipts] = useState(false);
   const dead = share.expired || share.exhausted;
+
+  const openReceipts = async () => {
+    setShowReceipts((v) => !v);
+    if (receipts !== null) return;
+    try {
+      const { receipts: list } = await api.get<{ receipts: ShareReceipt[] }>(`/shares/${share.id}/receipts`);
+      setReceipts(list);
+    } catch {
+      setReceipts([]);
+    }
+  };
 
   return (
     <div className="rounded-md p-2.5" style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', opacity: dead ? 0.6 : 1 }}>
@@ -209,6 +222,55 @@ function LinkRow({ share, onRevoke, detailed }: { share: ShareLink; onRevoke: ()
           )}
           {!share.allowPreview ? <span className="meta">download only</span> : null}
           {share.lastAccessedAt ? <span className="meta">last opened {relativeTime(share.lastAccessedAt)}</span> : null}
+          <button
+            type="button"
+            className="meta ml-auto underline decoration-[var(--line-strong)] underline-offset-2 transition-colors hover:text-[var(--text)]"
+            onClick={() => void openReceipts()}
+          >
+            {showReceipts ? 'hide receipts' : 'receipts'}
+          </button>
+        </div>
+      ) : null}
+
+      {showReceipts ? (
+        <div className="animate-rise mt-2 rounded-md p-2" style={{ background: 'var(--panel)', border: '1px solid var(--line)' }}>
+          {receipts === null ? (
+            <div className="skeleton h-8 rounded" />
+          ) : receipts.length === 0 ? (
+            <p className="text-[0.75rem]" style={{ color: 'var(--text-faint)' }}>
+              Nobody has opened this link yet.
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {receipts.slice(0, 12).map((receipt) => (
+                <li key={receipt.id} className="flex items-center gap-2">
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{
+                      background:
+                        receipt.type === 'share.download'
+                          ? 'var(--color-moss)'
+                          : receipt.type === 'share.denied'
+                            ? 'var(--color-rust)'
+                            : 'var(--color-lapis)',
+                    }}
+                  />
+                  <span className="flex-1 truncate text-[0.75rem]">
+                    {receipt.type === 'share.download'
+                      ? 'Downloaded'
+                      : receipt.type === 'share.denied'
+                        ? 'Wrong password'
+                        : 'Opened'}
+                    {receipt.anonymous ? '' : ' by you'}
+                  </span>
+                  <span className="meta shrink-0" title={formatDateTime(receipt.createdAt)}>
+                    {relativeTime(receipt.createdAt)}
+                  </span>
+                  <span className="meta w-[6rem] shrink-0 truncate text-right">{receipt.ip ?? '—'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       ) : null}
     </div>

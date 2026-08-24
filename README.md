@@ -18,6 +18,7 @@ demo account   demo@basalt.build / stone-and-ash-2026
 
 - [Quick start](#quick-start)
 - [What it does](#what-it-does)
+- [What makes it different](#what-makes-it-different)
 - [Architecture](#architecture)
 - [Data model](#data-model)
 - [Security](#security)
@@ -57,7 +58,7 @@ docker run -d --name basalt-pg -p 5432:5432 \
 | Command | Does |
 | --- | --- |
 | `npm run dev` | Both services with reload |
-| `npm test` | API test suite (40 tests, real Postgres, no mocks) |
+| `npm test` | API test suite (87 tests, real Postgres, no mocks) |
 | `npm run typecheck` | `tsc --noEmit` across both workspaces |
 | `npm run build` | Production build of both |
 | `npm run db:migrate` / `db:reset` / `db:seed` | Schema and demo data |
@@ -69,26 +70,128 @@ docker run -d --name basalt-pg -p 5432:5432 \
 **Accounts** — register, sign in, change password, list and revoke signed-in
 devices, delete the account and everything in it.
 
-**Files** — drag-and-drop upload of many files at once with live progress, rate
-and ETA per transfer, plus cancel and retry. Rename, move, star, soft-delete,
-restore, purge. Folders nest arbitrarily; cycles are rejected. Search by name
-across the whole drive, filter by twelve file families, sort by name, size or
-date, keyset-paginated.
+**Files** — drag-and-drop upload of many files at once, **resumable**: transfers
+survive a dropped connection, a pause, or a page reload, and a file the account
+already holds is stored instantly without sending a byte. Rename, move, star,
+soft-delete, restore, purge, and **version history** — uploading over a file
+keeps the old copy instead of making "report (2).pdf". Folders nest arbitrarily;
+cycles are rejected. Search reads **inside** files as well as their names,
+filter by twelve file families, sort by name, size or date, keyset-paginated.
 
 **Sharing** — a switch per file makes it public. Beyond that, a file can carry
 any number of links, each with its own optional password, expiry, download
 budget and preview permission. Every link is revocable and takes effect on the
 next request.
 
+**Receiving** — **upload links** point the other way: give someone a link and
+they can send files into one of your folders with no account, under a file cap,
+a size cap, an expiry and an optional password. You get an inbox of who sent
+what, and a sender can never overwrite something you already have.
+
 **Visibility** — a preview overlay for images, video, audio, PDF and text; a
-storage meter that shows what the space is made of; and an activity feed that
-records uploads, downloads, renames, visibility changes, link visits and failed
-password attempts, with time and address.
+storage meter that shows what the space is made of; per-link **receipts** (who
+opened it, when, from where); an **insights** page answering what is biggest,
+what is duplicated, what you have never opened and what version history is
+costing; and an activity feed recording uploads, downloads, renames, visibility
+changes, link visits and failed password attempts, with time and address.
 
 **Limits** — 512 MB per file and 10 GB per account by default, both
-configurable. Uploads are streamed, so file size is bounded by disk, not RAM.
-Verified with a 150 MB upload through the API and a 117 MB upload through the
-browser UI.
+configurable. Uploads are streamed and chunked, so file size is bounded by disk,
+not RAM. Verified with a 150 MB upload through the API and 117 MB through the
+browser UI, plus a resumed transfer that survived a mid-flight failure.
+
+---
+
+## What makes it different
+
+Six things about existing drives that annoy people, and what this does instead.
+Each is a real mechanism, not a setting.
+
+### 1. Two copies of a file cost space once
+
+Blobs are addressed by their SHA-256. Upload the same 200 MB video twice under
+two names and it occupies 200 MB, not 400. Quota is charged per *referenced
+blob* and maintained by a database trigger, so it cannot drift, and the insights
+page reports what this has saved you.
+
+De-duplication is scoped **per owner**, deliberately. A shared content index
+would let anyone test whether a given file already exists on the service by
+watching for an instant upload — an existence oracle over other people's data,
+which is not worth the disk it saves. There is a test asserting that one account
+cannot get an instant upload for another account's content.
+
+### 2. An upload that dies at 97% does not start over
+
+Uploads go through a session. The client hashes the file, asks whether the server
+already has it, and otherwise sends chunks — several at a time, in any order,
+retrying an individual chunk rather than the file.
+
+```
+POST   /api/uploads              → { instant: true, file }   nothing to send
+                                 → { session: { chunkSize, chunkCount, missing } }
+PUT    /api/uploads/:id/chunks/7 → one chunk, at its offset, idempotent
+GET    /api/uploads/:id          → what is still missing
+POST   /api/uploads/:id/complete → hash, verify, ingest
+```
+
+Server-side, chunks stream into **one sparse file** at their byte offset, so
+there is no reassembly pass and an abandoned 5 GB upload costs only the blocks
+that actually arrived. Which chunks have landed is a bitmap updated with
+`set_bit`, so a client retrying a chunk it already sent overwrites identical
+bytes rather than inflating a counter.
+
+Because the progress lives on the server, "what do you still need?" survives a
+network failure, a pause, and a page reload. After a reload the dock offers the
+unfinished transfer back — the browser will not hand a file's contents to script
+without a fresh gesture, so it asks for the file again and then sends only the
+missing parts.
+
+The file is verified, not trusted: the assembled bytes are hashed and compared
+with the digest the client declared, and any chunk may carry its own digest.
+A mismatch is refused rather than stored.
+
+### 3. "report (2).pdf" is not version control
+
+Uploading over an existing file adds a revision. Every revision is downloadable
+on its own, restoring is **additive** (it appends the old bytes as a new
+revision rather than truncating history, so undo is always available), and old
+revisions can be pruned — with the UI saying up front whether the space will
+actually come back, because if another file shares those exact bytes it will not.
+
+`onConflict: 'rename'` still exists for callers that want the old behaviour, and
+is pinned on for uploads arriving through a public link.
+
+### 4. "Please email me those files" is not a protocol
+
+An upload link is a share link pointing the other way: one folder, no account
+required of the sender, with a file cap, a byte cap, an expiry and an optional
+password. Slots are reserved atomically when a session opens and released if the
+sender gives up, so a link limited to three files cannot be talked into four by
+three simultaneous senders.
+
+The sender gets the same resumable, hashed, chunked transfer the owner does. What
+they do *not* get is any view of the drive: the completion response echoes the
+filename, size and checksum they sent, and nothing else. And their upload can
+never bury a file the owner already has.
+
+### 5. "Did they even open it?"
+
+Every share link keeps receipts — each view, download and failed password
+attempt, with time and address — readable from the link itself rather than by
+filtering a global log.
+
+### 6. "You are out of space" is not actionable
+
+The insights page answers the four questions someone actually has at that
+moment: what is biggest, what is duplicated, what have I not touched in ninety
+days, and what is version history costing me — each with the rows behind it and
+a way to act on them.
+
+Search reads inside files, too. Text, markdown, code, CSV and JSON are extracted
+on upload (plus a conservative PDF reader) into a generated `tsvector`, with the
+filename weighted above the contents. A query matches full-text **or** a filename
+fragment, because those fail differently: full text finds a word inside a
+document but not "forecas", and a trigram scan does the opposite.
 
 ---
 
@@ -107,6 +210,7 @@ browser UI.
 │                                                              │
 │  middleware   request id → logging → CORS → cookies → CSRF   │
 │  modules      auth · files · folders · shares · activity     │
+│               uploads · requests · insights                  │
 │                 routes  (HTTP, validation, status codes)     │
 │                 service (business rules, authorisation)      │
 │                 schemas (zod, one per input)                 │
@@ -139,7 +243,12 @@ apps/api/src
 ├── lib/                 errors, crypto, tokens, mime policy, filenames, http
 ├── middleware/          auth, csrf, rate limit, error handler, context
 ├── modules/<domain>/    routes · service · schemas (+ dto, upload, download)
-└── storage/             driver.ts (port) · local.ts · s3.ts
+│   ├── files/ingest.ts     the one door into the store: dedup, versioning
+│   ├── files/versions.ts   history, restore, prune
+│   ├── uploads/            resumable sessions, chunk bookkeeping
+│   ├── requests/           inbound upload links
+│   └── insights/           storage report, share receipts
+└── storage/             driver.ts (port) · local.ts · s3.ts · spool.ts
 ```
 
 ---
@@ -152,9 +261,14 @@ Six tables. The full DDL, with comments explaining each constraint, is
 | Table | Holds | Notable choices |
 | --- | --- | --- |
 | `users` | identity, quota, usage | `citext` email so `Ada@x.com` cannot become a second account; `storage_used_bytes` maintained by trigger |
+| `blobs` | the bytes, addressed by content hash | unique on `(owner, sha256)`, so a second copy is free; `ref_count` maintained by trigger, and reaching zero frees the quota immediately |
+| `file_versions` | one row per revision | the name is stored per revision, so renaming does not rewrite history |
+| `upload_sessions` | resumable transfers in flight | received chunks are a `bytea` bitmap updated with `set_bit`, making a retried chunk idempotent |
+| `file_requests` | inbound upload links | caps and expiry are the only thing between a public link and a full disk, so they are columns with check constraints |
+| `request_submissions` | who sent what through a link | keeps the filename and size even after the owner deletes the file |
 | `sessions` | one row per issued refresh token | `family_id` groups a rotation chain, so replaying a retired token can kill the whole chain |
 | `folders` | tree, soft-deleted | partial unique index on `(owner, parent, lower(name))` — sibling names are unique, case-insensitively, ignoring trash |
-| `files` | metadata; bytes live in storage | `mime_type` is what we serve, `declared_mime` is what the client claimed, `mime_mismatch` flags the disagreement |
+| `files` | metadata; points at a blob | `mime_type` is what we serve, `declared_mime` is what the client claimed, `mime_mismatch` flags the disagreement; `search_vector` is generated so it cannot drift |
 | `share_links` | public links | one `toggle` link per file (partial unique index) plus any number of `custom` ones |
 | `events` | append-only audit trail | keeps a denormalised `subject` so the trail still reads after a hard delete |
 
@@ -163,10 +277,14 @@ Design points worth calling out:
 - **Every index is deliberate.** Listing, trash, starred, search, purge sweeps
   and share resolution each have a matching (mostly partial) index; nothing is
   covered twice.
-- **Storage accounting is a trigger, not application code.** `files_storage_delta`
-  fires on insert/update/delete, so the counter cannot drift when a code path
-  forgets. Trash still occupies quota — it is recoverable, so pretending
-  otherwise would be lying to the user.
+- **Storage accounting is a trigger, not application code.** `blobs_storage_delta`
+  moves the counter only on the 0 ↔ non-zero reference transitions, because a
+  blob referenced once and a blob referenced five times occupy the same bytes.
+  Trash still occupies quota — it is recoverable, so pretending otherwise would
+  be lying to the user.
+- **Reference counting is a trigger too.** `file_versions_refcount` keeps
+  `blobs.ref_count` honest on every insert, update and delete, so no code path
+  can forget and leak a file's bytes.
 - **Names are unique per folder, resolved by query, not by retry.** A failed
   `INSERT` aborts the surrounding Postgres transaction, so the free name
   (`report (2).pdf`) is computed under the same row lock that guards the quota.
@@ -195,6 +313,11 @@ Design points worth calling out:
 | Brute force on links | Slugs carry ~69 bits of entropy; unlock attempts are limited per IP and slug; a password-protected link reveals nothing — not even the filename — before it is unlocked. |
 | Information leakage | Errors are RFC-9457-shaped with a stable code and a human message. Unexpected exceptions are logged with a request id and reported as a bare 500. Logs redact cookies, authorization headers and password fields. |
 | Transport | HSTS, `no-referrer`, and `Secure` + `__Host-`-prefixed cookies in production. |
+| Cross-account inference | De-duplication is scoped per owner, so an instant upload can never reveal that *someone else* holds a file. Asserted by test. |
+| Upload integrity | The assembled file is hashed and compared with the digest the client declared; individual chunks may carry their own. A chunk of the wrong length is refused and its bit left clear, so it can simply be resent. |
+| Resource exhaustion via sessions | Sessions expire, are capped per account, spool sparsely, and are swept with their partial bytes by the maintenance pass. |
+| Public write endpoints | An upload link reserves its slot atomically before accepting bytes, releases it if abandoned, pins `onConflict: 'rename'` so a sender cannot version over the owner's file, and returns nothing about the drive it wrote into. |
+| Search index poisoning | Extraction only accepts formats we can read unambiguously, and discards output that does not look like text — a garbage index matches everything, which is worse than no index. |
 
 Two deliberate refusals, both visible in the code:
 
@@ -208,6 +331,12 @@ Two deliberate refusals, both visible in the code:
 ---
 
 ## The upload path
+
+There are two ways in. The browser uses the resumable session protocol described
+[above](#2-an-upload-that-dies-at-97-does-not-start-over); the one-shot
+multipart route below remains for scripts, `curl` and anything that would rather
+send a whole file in one request. Both converge on the same ingest function, so
+they get the same validation, quota arithmetic and audit trail.
 
 `POST /api/files`, `multipart/form-data`, one or many files.
 
@@ -230,7 +359,7 @@ per file, in order:
   5. on any failure, delete the blob again — the database is the source of truth
 ```
 
-A batch reports per-file outcomes: `{ files: [...], rejected: [{ name, code, message }] }`.
+A batch reports per-file outcomes: `{ files, rejected, deduped, versioned }`.
 One rejected file out of twelve does not discard the other eleven. If nothing
 lands, the response carries the status the first failure actually earned — 413
 too large, 415 unsupported, 507 out of space — instead of flattening every cause
@@ -312,6 +441,19 @@ Cookies carry the session; mutating requests need `X-CSRF-Token`.
 | `DELETE` | `/files/:id` | To trash |
 | `POST` | `/files/actions/{trash,restore,purge,move,star}` | Bulk, by id list |
 | `DELETE` | `/files/trash` | Empty the trash |
+| `GET` | `/files/:id/versions` | Revision history |
+| `POST` | `/files/:id/versions/:n/restore` | Append that revision as the newest |
+| `DELETE` | `/files/:id/versions/:n` | Prune a superseded revision |
+
+### Resumable uploads
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `POST` | `/uploads` | Open a session — or return a finished file, if the offered hash is one we hold |
+| `GET` | `/uploads` · `/uploads/:id` | Unfinished sessions · what a session still needs |
+| `PUT` | `/uploads/:id/chunks/:index` | One chunk, streamed; idempotent; optional `X-Chunk-Sha256` |
+| `POST` | `/uploads/:id/complete` | Verify the assembled hash, then ingest |
+| `DELETE` | `/uploads/:id` | Abandon, and drop the partial bytes |
 
 ### Folders · Shares · Activity
 
@@ -324,6 +466,11 @@ Cookies carry the session; mutating requests need `X-CSRF-Token`.
 | `GET` `POST` | `/shares` | Every live link · create one |
 | `PATCH` `DELETE` | `/shares/:id` | Update conditions · revoke |
 | `GET` | `/activity` | Own actions plus anonymous hits on own links, keyset-paginated |
+| `GET` | `/shares/:id/receipts` | Views, downloads and failed passwords for one link |
+| `GET` `POST` | `/requests` | Upload links · create one |
+| `GET` | `/requests/:id/submissions` | What arrived through a link, and from whom |
+| `PATCH` `DELETE` | `/requests/:id` | Change the caps · close the link |
+| `GET` | `/insights` | Largest, duplicated, stale, version-heavy, reclaimable |
 
 ### Public (no session)
 
@@ -332,6 +479,11 @@ Cookies carry the session; mutating requests need `X-CSRF-Token`.
 | `GET` | `/s/:slug` | Metadata, or `{ requiresPassword: true }` and nothing else |
 | `POST` | `/s/:slug/unlock` | Returns a grant scoped to this slug. 10/15min per IP+slug |
 | `GET` `HEAD` | `/s/:slug/content` | Claims a download from the budget before streaming |
+| `GET` | `/r/:slug` | Upload-link details, or `{ requiresPassword: true }` |
+| `POST` | `/r/:slug/unlock` | Grant scoped to this link |
+| `POST` | `/r/:slug/uploads` | Open a session as the owner, into their folder |
+| `PUT` | `/r/:slug/uploads/:id/chunks/:index` | Same chunk protocol, no account needed |
+| `POST` | `/r/:slug/uploads/:id/complete` | Echoes only what was sent |
 | `GET` | `/health` | Liveness + database latency |
 
 Errors are consistent:
@@ -378,9 +530,22 @@ the phrase.
 
 **Transfers** get a download-manager dock rather than a toast, because a 100 MB
 upload outlives the user's attention: per-file progress, smoothed rate, ETA, a
-throughput sparkline that makes a stalled connection obvious, cancel, and retry.
-Files that cannot possibly succeed — empty, over the limit, a blocked extension —
-are rejected client-side with a reason before a byte leaves the machine.
+throughput sparkline that makes a stalled connection obvious, and pause, resume,
+cancel and retry. Files that cannot possibly succeed — empty, over the limit, a
+blocked extension — are rejected client-side with a reason before a byte leaves
+the machine.
+
+The dock also shows the two states that only exist because uploads are
+resumable: **paused** after a network failure, where nothing is lost and
+resuming asks the server what is still missing; and **interrupted**, for a
+session that outlived the page, which asks for the file again and then sends
+only the part that never arrived.
+
+**SHA-256 is implemented here** ([`lib/sha256.ts`](apps/web/lib/sha256.ts)),
+because `crypto.subtle` can only digest a buffer it already holds — hashing a
+400 MB file that way means 400 MB in memory. This one eats the file in slices,
+keeping memory flat, and yields between them so the tab stays responsive. It is
+verified against Node's implementation across the awkward block-boundary lengths.
 
 **State.** One store (`lib/vault-context.tsx`) owns files, folders, quota and
 selection, so the sidebar counts, the table, the meter and the dock always agree.
@@ -401,10 +566,10 @@ a drawer, grid becomes two columns, search moves to its own row) up.
 npm test
 ```
 
-40 tests against a real Postgres database (`basalt_test`, built by the same
+87 tests against a real Postgres database (`basalt_test`, built by the same
 migrations as production) and the real Express app through supertest. No mocked
 database, no mocked storage — uploads are streamed through busboy onto disk and
-read back byte-for-byte.
+read back byte-for-byte, and the resumable tests drive the real chunk protocol.
 
 The suite is organised around behaviour that would matter in review:
 
@@ -423,6 +588,30 @@ The suite is organised around behaviour that would matter in review:
   trashing revoking links; a password link leaking nothing before unlock; a grant
   refused on a different slug; budget exhaustion; expiry; preview refused when
   the owner disabled it; and the audit trail recording an anonymous download.
+- **uploads** — a multi-chunk file reassembled byte-for-byte; a resume after two
+  chunks are deliberately dropped, including the "still missing" report and the
+  refusal to complete early; a repeated chunk that does not double-count; a
+  short chunk refused and resent; a bad per-chunk digest refused; an assembled
+  hash that contradicts the client refused *and nothing stored*; sessions
+  private to their account; and rejection of an oversized or blocked file before
+  any bytes move.
+- **content addressing** — the same bytes charged once however many files point
+  at them; the surviving copy still readable after its twin is purged; an
+  instant upload when the hash is known; **no** instant upload for another
+  account's content; and the bytes freed only when the last reference goes.
+- **versions** — history recorded and older revisions served; restore appending
+  rather than rewinding; a repeated revision costing nothing; the current
+  revision refusing to be deleted; and history private to the owner.
+- **requests** — a stranger uploading with no account; the owner's inbox of who
+  sent what; a sender unable to overwrite the owner's file; file and byte caps;
+  a slot released when a sender abandons; a password hiding even the title; a
+  grant refused on another link; revocation and expiry; the owner's quota being
+  the one charged; and a completion response that leaks nothing.
+- **search and insights** — a file found by a word inside it; a filename
+  fragment still matching; binary not indexed; re-indexing when a version
+  replaces the contents; one account's contents invisible to another; duplicate
+  and version-cost reporting; and receipts recording views, downloads and failed
+  passwords.
 
 ---
 
@@ -524,6 +713,25 @@ rewrite proxy silently fails on request bodies over roughly 10 MB — fatal for 
 file service, and it cost real debugging time to find. The API base is one
 variable, so a single-origin deployment sets `/api` and gets the proxy path.
 
+**Content addressing before features.** De-duplication, instant uploads and
+version history are three faces of one decision: separate "the bytes" from "the
+file that points at them". Building them as three features would have meant
+three sets of accounting bugs.
+
+**One ingest path, four callers.** A plain multipart upload, the last step of a
+resumable session, a submission through an upload link, and an instant upload of
+known content all funnel through `files/ingest.ts`. Writing that validation four
+times is how one of them ends up subtly weaker than the others.
+
+**Chunks into a sparse file, not a directory of parts.** Positional writes at
+`index × chunkSize` mean the finished file already exists the moment the last
+chunk lands: no reassembly pass, no fragment cleanup, and constant memory.
+
+**Capacity is checked where it is claimed, not where the link is resolved.** The
+first version of upload links checked "is this link full?" during resolution,
+which then rejected the chunks of the very upload that had just reserved the last
+slot. Reservation and validity are separate questions.
+
 **No UI kit.** The brief asked for a considered interface. A component library
 would have produced a competent-looking application that could be any other
 application; the parts worth looking at here — the core-sample meter, the
@@ -536,9 +744,6 @@ a kit cannot provide.
 
 Honest about the edges:
 
-- **No resumable uploads.** A dropped connection restarts that file. Real
-  resumability needs chunked multipart with an upload session per file — the
-  right phase-two feature for anything over a few hundred megabytes.
 - **No thumbnail pipeline.** Grid tiles render the original image, which is fine
   for a 500 KB photograph and wasteful for a 40 MB one. Needs a worker
   generating derivatives on upload.
@@ -546,12 +751,17 @@ Honest about the edges:
   `put` — the blob is already on disk and not yet visible to anyone.
 - **No email.** So no verification and no password reset; the account is the only
   way back in. Both are plumbing, not design.
-- **Search is trigram `LIKE` on the filename.** It does not read file contents.
-  A `tsvector` column and an extraction step would fix that.
-- **Rate limits and sessions are single-instance** as described above.
+- **Content extraction is narrow on purpose.** Text, code, markdown, CSV, JSON
+  and simple PDFs. Office documents are zip containers and scanned pages need
+  OCR; both belong in an extraction worker rather than in the request path.
+- **Resuming after a reload needs the file re-picked.** The browser will not hand
+  a file's contents back to script without a fresh gesture. Everything already
+  transferred still counts, but the gesture is unavoidable.
+- **Rate limits and upload-session state are single-instance** as described
+  above.
 
-Phase two, in the order I would build it: resumable chunked uploads · shared
-folders with per-recipient permissions and named recipients instead of bearer
-links · server-side thumbnails and text extraction for real search · versioning
-with restore · optional client-side encryption for a zero-knowledge tier ·
-scheduled link expiry notifications · a `basalt` CLI over the same API.
+Phase three, in the order I would build it: shared folders with named recipients
+and per-recipient permissions instead of bearer links · a thumbnail and
+extraction worker (which also unlocks Office documents and OCR) · optional
+client-side encryption for a zero-knowledge tier · scheduled expiry notices ·
+a `basalt` CLI over the same API.

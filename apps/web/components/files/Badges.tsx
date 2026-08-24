@@ -1,10 +1,10 @@
-import { IconGlobe, IconLock, IconWarn } from '@/components/ui/icons';
+import { IconGlobe, IconLock, IconUpload, IconWarn } from '@/components/ui/icons';
 import type { StoredFile } from '@/lib/types';
 
 /**
- * The three things about a file that are worth interrupting a scan for: it is
- * reachable from outside the account, it has more than one link, or its bytes
- * disagreed with its name when it arrived.
+ * The handful of things about a file worth interrupting a scan for: it is
+ * reachable from outside the account, it has a history, someone else sent it, or
+ * its bytes disagreed with its name when it arrived.
  */
 export function Badges({ file, shareLocked }: { file: StoredFile; shareLocked?: boolean }) {
   return (
@@ -22,6 +22,20 @@ export function Badges({ file, shareLocked }: { file: StoredFile; shareLocked?: 
       {shareLocked ? (
         <span title="Protected by a password" style={{ color: 'var(--color-clay)' }}>
           <IconLock size={12} />
+        </span>
+      ) : null}
+      {file.versionCount > 1 ? (
+        <span
+          className="chip"
+          title={`${file.versionCount} revisions — the current one is v${file.version}`}
+          style={{ color: 'var(--text-dim)', background: 'var(--hover)' }}
+        >
+          v{file.version}
+        </span>
+      ) : null}
+      {file.requestId ? (
+        <span title="Received through an upload link" style={{ color: 'var(--color-lapis)' }}>
+          <IconUpload size={12} />
         </span>
       ) : null}
       {file.mimeMismatch ? (

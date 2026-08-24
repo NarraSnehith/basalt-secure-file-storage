@@ -115,6 +115,8 @@ export function CommandPalette({ onUpload, onNewFolder }: { onUpload: () => void
       ['Recent', '/vault/recent', <IconClock key="r" size={15} />],
       ['Starred', '/vault/starred', <IconStar key="s" size={15} />],
       ['Shared links', '/vault/shared', <IconShare key="sh" size={15} />],
+      ['Upload links', '/vault/requests', <IconUpload key="ul" size={15} />],
+      ['Insights', '/vault/insights', <IconSettings key="in" size={15} />],
       ['Activity', '/vault/activity', <IconActivity key="a" size={15} />],
       ['Trash', '/vault/trash', <IconTrash key="t" size={15} />],
       ['Settings', '/vault/settings', <IconSettings key="se" size={15} />],

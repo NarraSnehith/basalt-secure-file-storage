@@ -510,7 +510,12 @@ export async function freeName(
  * search can find a file by something it says rather than only by its name.
  * A failure here is not worth failing an upload over.
  */
-async function indexContent(fileId: string, blobId: string, mimeType: string, size: number): Promise<void> {
+export async function indexContent(
+  fileId: string,
+  blobId: string,
+  mimeType: string,
+  size: number,
+): Promise<void> {
   try {
     const text = await extractText(blobId, mimeType, size);
     await db
@@ -521,4 +526,29 @@ async function indexContent(fileId: string, blobId: string, mimeType: string, si
   } catch (err) {
     logger.warn({ err, fileId }, 'content extraction failed');
   }
+}
+
+/**
+ * Re-index files whose contents have not been read yet.
+ *
+ * Extraction is deliberately fire-and-forget, which means it can be lost — the
+ * process restarts, or a revision is restored and invalidates what was there.
+ * Rather than pretend that never happens, `content_indexed` records whether the
+ * work was done and this pass finishes whatever is outstanding. It runs with
+ * maintenance, and the seed calls it so a fresh database is searchable.
+ */
+export async function reindexPending(limit = 200): Promise<number> {
+  const due = await db
+    .selectFrom('files')
+    .innerJoin('blobs', 'blobs.id', 'files.blob_id')
+    .select(['files.id', 'files.blob_id', 'files.mime_type', 'files.size_bytes'])
+    .where('files.content_indexed', '=', false)
+    .where('files.deleted_at', 'is', null)
+    .limit(limit)
+    .execute();
+
+  for (const row of due) {
+    await indexContent(row.id, row.blob_id, row.mime_type, Number(row.size_bytes));
+  }
+  return due.length;
 }

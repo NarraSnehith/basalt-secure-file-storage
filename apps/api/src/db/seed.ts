@@ -16,7 +16,7 @@ import { hashPassword } from '../lib/crypto.js';
 import { initStorage, newSpoolPath } from '../storage/index.js';
 import { createFolder } from '../modules/folders/service.js';
 import { setVisibility } from '../modules/files/service.js';
-import { ingest } from '../modules/files/ingest.js';
+import { ingest, reindexPending } from '../modules/files/ingest.js';
 import { createShare } from '../modules/shares/service.js';
 import { createRequest } from '../modules/requests/service.js';
 import type { ReceivedBlob } from '../modules/files/upload.js';
@@ -215,6 +215,16 @@ async function main(): Promise<void> {
 
   await db.updateTable('files').set({ starred: true }).where('id', 'in', [survey.id, plate.id]).execute();
 
+  // Extraction is fire-and-forget during an upload, and this process is about
+  // to exit — finish anything outstanding so a freshly seeded drive is
+  // searchable, then report the total rather than the leftovers.
+  await reindexPending();
+  const indexed = await db
+    .selectFrom('files')
+    .select(({ fn }) => fn.countAll<string>().as('n'))
+    .where('content_text', 'is not', null)
+    .executeTakeFirst();
+
   const stats = await db
     .selectFrom('users')
     .select(['storage_used_bytes'])
@@ -228,6 +238,7 @@ async function main(): Promise<void> {
     used      ${(Number(stats.storage_used_bytes) / 1024).toFixed(0)} KB
     shares    2 public links + 1 password-protected (password: quartz-seam)
     request   ${request.url}
+    indexed   ${indexed?.n ?? 0} files searchable by their contents
 `);
   void randomUUID; // keep the import honest if the block above is edited
 }

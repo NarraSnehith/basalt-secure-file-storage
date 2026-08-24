@@ -3,6 +3,7 @@ import { db } from '../../db/client.js';
 import { AppError } from '../../lib/errors.js';
 import { recordEvent } from '../activity/service.js';
 import { toFileDTO, type FileDTO } from './dto.js';
+import { indexContent } from './ingest.js';
 import { releaseUnreferencedBlobs } from './service.js';
 
 /**
@@ -151,6 +152,9 @@ export async function restoreVersion(
       .returningAll()
       .executeTakeFirstOrThrow();
   });
+
+  // The contents changed, so what was indexed no longer describes the file.
+  void indexContent(fileId, row.blob_id, row.mime_type, Number(row.size_bytes));
 
   await recordEvent({
     type: 'file.version_restore',
