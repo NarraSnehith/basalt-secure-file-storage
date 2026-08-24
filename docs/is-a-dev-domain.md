@@ -19,7 +19,7 @@ not, so pair this with Render.
     "email": "you@example.com"
   },
   "records": {
-    "CNAME": "basalt-web.onrender.com"
+    "CNAME": "basalt.onrender.com"
   }
 }
 ```

@@ -744,9 +744,9 @@ and validated by zod at boot. See [`.env.example`](.env.example).
 ## Deployment
 
 Everything here is on a free tier that does not expire, and none of it needs a
-card except where noted. The shape is one always-on container serving both
-halves behind a single hostname, a managed Postgres, and an object store for the
-file bytes.
+card except the object store. The shape is one container serving both halves
+behind a single hostname, a managed Postgres, and an object store for the file
+bytes.
 
 ```
         ┌─────────────── one container ───────────────┐
@@ -767,6 +767,13 @@ Create a project at <https://neon.tech>, choose **Postgres 17** (what the test
 suite runs against), then copy the **direct** connection string — the one whose
 host does *not* contain `-pooler`. That is your `DATABASE_URL`; also set
 `DATABASE_SSL=true`.
+
+`DATABASE_SSL` is a fallback, not the mechanism. Neon's string carries
+`sslmode=require`, and node-postgres lets the connection string override the
+pool's own `ssl` option — so the connection ends up TLS-verified against the
+public CA store, which is *stronger* than the `rejectUnauthorized: false` the
+flag asks for. Setting it matters only for a `DATABASE_URL` that arrives without
+an `sslmode`.
 
 The direct endpoint matters. Neon's pooled endpoint is PgBouncer in transaction
 mode, where consecutive statements may land on different backends, and
@@ -812,38 +819,43 @@ any AWS bucket with ACLs disabled.
 > travel straight from the bucket and never occupy the app. An internal-only
 > endpoint will upload fine and fail on download.
 
-### 3. Hosting — Koyeb (always on) or Render (spins down)
+### 3. Hosting — Render
 
-**Koyeb** — free tier is one always-on service, so a visitor never waits for a
-cold start. New → Web Service → GitHub → this repo → Dockerfile. Set the
-environment variables from steps 1 and 2, plus:
+[`render.yaml`](render.yaml) is a blueprint for exactly this: **New → Blueprint**,
+point it at the repo, and it prompts for the six values from steps 1 and 2 while
+generating the two token secrets itself.
 
-```bash
-NODE_ENV=production
-TRUST_PROXY=true
-```
+It declares **one** service rather than two. The container runs Next on the
+public port with Express behind it on loopback, so the browser sees a single
+origin — which is what the `__Host-` prefixed session cookies require. Split
+across two `*.onrender.com` hostnames those cookies would be cross-site and the
+login would silently fail to stick.
 
-You get a permanent `*.koyeb.app` hostname. `WEB_ORIGIN` is worked out from it
-automatically, so there is nothing else to set.
+`WEB_ORIGIN` is deliberately absent from the blueprint: [`env.ts`](apps/api/src/config/env.ts)
+reads `RENDER_EXTERNAL_URL`, so CORS and the share links match the real hostname
+with nothing to configure.
 
-**Render** — [`render.yaml`](render.yaml) is a blueprint: New → Blueprint, point
-it at the repo. Free web services sleep after 15 minutes idle and take about a
-minute to wake, which is fine for a demo somebody visits occasionally and poor
-for one being reviewed. It does support custom domains on the free plan, which
-Koyeb reserves for paid.
+Free instances sleep after 15 minutes idle and take about a minute to wake. The
+hostname is permanent; only the first request after a quiet spell pays for it.
 
-Either way: **do not use the free tier's disk for files.** It is wiped on every
-deploy. That is what step 2 is for.
+> Koyeb used to be the recommendation here because its free tier stayed awake.
+> It no longer has one — its pricing now starts at $29/month — so the
+> `KOYEB_PUBLIC_DOMAIN` branch in `inferWebOrigin` is kept only for anyone on a
+> paid plan. Render's free Postgres is not a substitute for step 1 either: it is
+> deleted after 30 days, which is the opposite of a permanent link.
+
+**Do not use the free tier's disk for files.** It is wiped on every deploy. That
+is what step 2 is for.
 
 ### 4. A permanent address
 
-The host subdomain (`your-app.koyeb.app`) is already permanent and free — for
-most purposes that is the answer.
+The host subdomain (`your-app.onrender.com`) is already permanent and free — for
+most purposes that is the answer. It survives redeploys; nothing about it lapses.
 
 If you want something that reads better, `is-a.dev` gives away permanent
 subdomains through a pull request, and [`docs/is-a-dev-domain.md`](docs/is-a-dev-domain.md)
-has the exact file to submit. It needs a host that supports custom domains, so
-pair it with Render rather than Koyeb's free plan.
+has the exact file to submit. Render supports custom domains on the free plan,
+so it works with the deployment above.
 
 There is no longer a source of free permanent *top-level* domains — Freenom, the
 one everybody remembers, stopped issuing them. A `.com` is a few dollars a year
@@ -852,7 +864,7 @@ if the name matters.
 ### Checking a deployment
 
 ```bash
-curl https://your-app.example/api/health
+curl https://basalt.onrender.com/api/health
 # {"status":"ok","storage":"s3","dbLatencyMs":12,…}
 ```
 
