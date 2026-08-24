@@ -12,3 +12,4 @@ var/
 !var/.gitkeep
 storage/
 *.tsbuildinfo
+DEPLOY-ENV.local.txt
