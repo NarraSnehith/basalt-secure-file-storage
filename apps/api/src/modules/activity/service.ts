@@ -12,10 +12,13 @@ export type EventType =
   | 'auth.register' | 'auth.login' | 'auth.login_failed' | 'auth.logout'
   | 'auth.password_changed' | 'auth.refresh_reuse' | 'auth.session_revoked'
   | 'file.upload' | 'file.download' | 'file.rename' | 'file.move'
+  | 'file.version' | 'file.version_restore' | 'file.version_delete'
   | 'file.trash' | 'file.restore' | 'file.purge' | 'file.visibility'
   | 'folder.create' | 'folder.rename' | 'folder.trash' | 'folder.restore'
   | 'share.create' | 'share.update' | 'share.revoke'
-  | 'share.view' | 'share.download' | 'share.denied';
+  | 'share.view' | 'share.download' | 'share.denied'
+  | 'request.create' | 'request.revoke' | 'request.submit' | 'request.denied'
+  | 'upload.start' | 'upload.resume' | 'upload.abort';
 
 export interface EventInput {
   type: EventType;

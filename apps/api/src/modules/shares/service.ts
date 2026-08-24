@@ -233,13 +233,14 @@ export async function resolveShare(slug: string): Promise<ResolvedShare> {
   const row = await db
     .selectFrom('share_links')
     .innerJoin('files', 'files.id', 'share_links.file_id')
+    .innerJoin('blobs', 'blobs.id', 'files.blob_id')
     .innerJoin('users', 'users.id', 'share_links.owner_id')
     .select([
       'share_links.id as share_id', 'share_links.slug', 'share_links.password_hash',
       'share_links.expires_at', 'share_links.max_downloads', 'share_links.download_count',
       'share_links.allow_preview', 'share_links.created_at', 'share_links.revoked_at',
       'files.id as file_id', 'files.name', 'files.kind', 'files.mime_type', 'files.mime_mismatch',
-      'files.size_bytes', 'files.storage_key', 'files.checksum_sha256', 'files.deleted_at',
+      'files.size_bytes', 'blobs.storage_key', 'files.checksum_sha256', 'files.deleted_at',
       'files.visibility',
       'users.display_name as owner_name',
     ])

@@ -4,6 +4,9 @@ type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
 
 export type FileVisibility = 'private' | 'public';
 export type ShareKind = 'toggle' | 'custom';
+export type VersionSource = 'upload' | 'request' | 'restore';
+export type UploadStatus = 'open' | 'completing' | 'complete' | 'aborted';
+export type ConflictMode = 'version' | 'rename';
 
 export interface UsersTable {
   id: Generated<string>;
@@ -42,6 +45,87 @@ export interface FoldersTable {
   deleted_at: Timestamp | null;
 }
 
+/** The bytes, addressed by their content hash. Shared by files and versions. */
+export interface BlobsTable {
+  id: Generated<string>;
+  owner_id: string;
+  checksum_sha256: Buffer;
+  size_bytes: ColumnType<string, number | string, number | string>;
+  storage_driver: string;
+  storage_key: string;
+  ref_count: Generated<number>;
+  created_at: Timestamp;
+}
+
+export interface FileVersionsTable {
+  id: Generated<string>;
+  file_id: string;
+  version: number;
+  blob_id: string;
+  name: string;
+  mime_type: string;
+  declared_mime: string | null;
+  mime_mismatch: Generated<boolean>;
+  size_bytes: ColumnType<string, number | string, number | string>;
+  source: Generated<VersionSource>;
+  note: string | null;
+  created_at: Timestamp;
+  created_by: string | null;
+}
+
+export interface UploadSessionsTable {
+  id: Generated<string>;
+  owner_id: string;
+  folder_id: string | null;
+  filename: string;
+  declared_mime: string | null;
+  size_bytes: ColumnType<string, number | string, number | string>;
+  expected_checksum: Buffer | null;
+  chunk_size: number;
+  chunk_count: number;
+  received: Buffer;
+  received_count: Generated<number>;
+  spool_key: string;
+  status: Generated<UploadStatus>;
+  on_conflict: Generated<ConflictMode>;
+  request_id: string | null;
+  submitter: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  expires_at: Timestamp;
+}
+
+export interface FileRequestsTable {
+  id: Generated<string>;
+  owner_id: string;
+  folder_id: string;
+  slug: string;
+  title: string;
+  message: string | null;
+  password_hash: string | null;
+  max_files: number | null;
+  max_bytes: ColumnType<string, number | string | null, number | string | null> | null;
+  expires_at: Timestamp | null;
+  submission_count: Generated<number>;
+  received_bytes: ColumnType<string, number | string | undefined, number | string>;
+  revoked_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  last_used_at: Timestamp | null;
+}
+
+export interface RequestSubmissionsTable {
+  id: Generated<string>;
+  request_id: string;
+  file_id: string | null;
+  filename: string;
+  size_bytes: ColumnType<string, number | string, number | string>;
+  submitter: string | null;
+  ip: string | null;
+  user_agent: string | null;
+  created_at: Timestamp;
+}
+
 export interface FilesTable {
   id: Generated<string>;
   owner_id: string;
@@ -54,8 +138,12 @@ export interface FilesTable {
   mime_mismatch: Generated<boolean>;
   size_bytes: ColumnType<string, number | string, number | string>;
   checksum_sha256: Buffer;
-  storage_driver: string;
-  storage_key: string;
+  blob_id: string;
+  version: Generated<number>;
+  version_count: Generated<number>;
+  request_id: string | null;
+  content_text: string | null;
+  content_indexed: Generated<boolean>;
   visibility: Generated<FileVisibility>;
   starred: Generated<boolean>;
   download_count: Generated<number>;
@@ -99,6 +187,11 @@ export interface EventsTable {
 
 export interface Database {
   users: UsersTable;
+  blobs: BlobsTable;
+  file_versions: FileVersionsTable;
+  upload_sessions: UploadSessionsTable;
+  file_requests: FileRequestsTable;
+  request_submissions: RequestSubmissionsTable;
   sessions: SessionsTable;
   folders: FoldersTable;
   files: FilesTable;
@@ -114,3 +207,8 @@ export type FolderRow = Selectable<FoldersTable>;
 export type FileRow = Selectable<FilesTable>;
 export type ShareLinkRow = Selectable<ShareLinksTable>;
 export type EventRow = Selectable<EventsTable>;
+export type BlobRow = Selectable<BlobsTable>;
+export type FileVersionRow = Selectable<FileVersionsTable>;
+export type UploadSessionRow = Selectable<UploadSessionsTable>;
+export type FileRequestRow = Selectable<FileRequestsTable>;
+export type RequestSubmissionRow = Selectable<RequestSubmissionsTable>;

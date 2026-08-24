@@ -8,6 +8,7 @@ import { signShareGrant, verifyShareGrant } from '../../lib/tokens.js';
 import { recordEvent } from '../activity/service.js';
 import { streamBlob } from '../files/download.js';
 import { registerDownload } from '../files/service.js';
+import { receiptsRoute } from '../insights/routes.js';
 import { createShareSchema, slugParams, unlockSchema, updateShareSchema } from './schemas.js';
 import {
   checkSharePassword,
@@ -62,6 +63,9 @@ sharesRouter.post(
     res.status(201).json({ share });
   }),
 );
+
+/** Who has opened this link, and when. */
+sharesRouter.get('/:id/receipts', receiptsRoute);
 
 sharesRouter.patch(
   '/:id',

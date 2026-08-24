@@ -15,8 +15,10 @@ import { env } from '../config/env.js';
 import { hashPassword } from '../lib/crypto.js';
 import { initStorage, newSpoolPath } from '../storage/index.js';
 import { createFolder } from '../modules/folders/service.js';
-import { persistUpload, setVisibility } from '../modules/files/service.js';
+import { setVisibility } from '../modules/files/service.js';
+import { ingest } from '../modules/files/ingest.js';
 import { createShare } from '../modules/shares/service.js';
+import { createRequest } from '../modules/requests/service.js';
 import type { ReceivedBlob } from '../modules/files/upload.js';
 import { makeGzip, makePdf, makePng, makeWav } from './fixtures.js';
 
@@ -146,7 +148,7 @@ async function main(): Promise<void> {
   const created: Array<{ id: string; name: string }> = [];
   for (const [name, contents, mime, folderId] of items) {
     const blob = await blobFrom(name, contents, mime);
-    const file = await persistUpload(user, blob, { folderId, visibility: 'private' }, seedRequest);
+    const { file } = await ingest(user, blob, { folderId, onConflict: 'rename', source: 'upload' }, seedRequest);
     created.push({ id: file.id, name: file.name });
   }
 
@@ -165,10 +167,46 @@ async function main(): Promise<void> {
     allowPreview: false,
   }, seedRequest);
 
+  // ── phase-two features want something to show ──────────────────────────
+  // A file with real history: three revisions, one of which repeats an earlier
+  // one so the "identical content costs nothing" case is visible.
+  const notes = 'survey-notes.md';
+  for (const [n, body] of [
+    [2, '# Field notes\n\n## Site 4 (revised)\n\n- Columnar jointing, 11 m face\n- Recount: three shear zones, two healed\n'],
+    [3, '# Field notes\n\n## Site 4 (final)\n\n- Columnar jointing, 11.4 m face\n- Three shear zones, two healed\n- Photographed at golden hour\n'],
+  ] as Array<[number, string]>) {
+    void n;
+    const revision = await blobFrom(notes, Buffer.from(body), 'text/markdown');
+    await ingest(user, revision, { folderId: folders['Field notes']!, onConflict: 'version', source: 'upload' }, seedRequest);
+  }
+
+  // A de-duplicated copy: same bytes under a second name, costing nothing.
+  const duplicate = await blobFrom('column-cross-section (for print).png', hexagons, 'image/png');
+  await ingest(user, duplicate, { folderId: raw.id, onConflict: 'rename', source: 'upload' }, seedRequest);
+
+  // An open request link, so the inbound-upload page has something to render.
+  const request = await createRequest(
+    user.id,
+    {
+      title: 'Send me your site photographs',
+      message: 'Anything from the 2026 season. JPEG or PNG, up to 50 MB each.',
+      folderId: folders['Photography']!,
+      maxFiles: 20,
+      maxBytes: 500 * 1024 * 1024,
+      expiresAt: new Date(Date.now() + 30 * 86_400_000),
+    },
+    seedRequest,
+  );
+
   // A couple of items in the trash so restore has something to act on.
   const trashName = 'draft-abstract.md';
   const trashBlob = await blobFrom(trashName, Buffer.from('# Draft abstract\n\nSuperseded — see v3.\n'), 'text/markdown');
-  const trashed = await persistUpload(user, trashBlob, { folderId: null, visibility: 'private' }, seedRequest);
+  const { file: trashed } = await ingest(
+    user,
+    trashBlob,
+    { folderId: null, onConflict: 'rename', source: 'upload' },
+    seedRequest,
+  );
   await db
     .updateTable('files')
     .set({ deleted_at: new Date(), purge_after: new Date(Date.now() + env.TRASH_RETENTION_DAYS * 86_400_000) })
@@ -189,6 +227,7 @@ async function main(): Promise<void> {
     password  ${DEMO_PASSWORD}
     used      ${(Number(stats.storage_used_bytes) / 1024).toFixed(0)} KB
     shares    2 public links + 1 password-protected (password: quartz-seam)
+    request   ${request.url}
 `);
   void randomUUID; // keep the import honest if the block above is edited
 }

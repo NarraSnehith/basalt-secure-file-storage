@@ -15,12 +15,12 @@ import {
   patchFileSchema,
   uploadFieldsSchema,
 } from './schemas.js';
+import { ingest } from './ingest.js';
 import {
   emptyTrash,
   getFile,
   listFiles,
   moveFile,
-  persistUpload,
   purgeFiles,
   registerDownload,
   renameFile,
@@ -32,6 +32,7 @@ import {
   trashFiles,
 } from './service.js';
 import { discardBlobs, receiveMultipart } from './upload.js';
+import { deleteVersion, listVersions, restoreVersion } from './versions.js';
 
 const idParams = z.object({ id: uuid });
 
@@ -62,19 +63,36 @@ filesRouter.post(
     const created: FileDTO[] = [];
     const rejected: Array<{ name: string; code: string; message: string }> = [];
     const failures: AppError[] = [];
+    // Reported back so the client can say "already in your drive, added
+    // instantly" rather than pretending it transferred something.
+    let dedupedCount = 0;
+    let versionedCount = 0;
 
     // Per-file outcomes: one bad file in a drag-and-drop of twelve should not
     // discard the other eleven.
     for (const blob of blobs) {
       try {
-        created.push(
-          await persistUpload(
-            req.auth!.user,
-            blob,
-            { folderId: parsedFields.folderId ?? null, visibility: parsedFields.visibility },
-            req,
-          ),
+        const result = await ingest(
+          req.auth!.user,
+          {
+            filename: blob.filename,
+            declaredMime: blob.declaredMime,
+            spoolPath: blob.spoolPath,
+            size: blob.size,
+            checksum: blob.checksum,
+            head: blob.head,
+          },
+          {
+            folderId: parsedFields.folderId ?? null,
+            visibility: parsedFields.visibility,
+            onConflict: parsedFields.onConflict,
+            source: 'upload',
+          },
+          req,
         );
+        created.push(result.file);
+        if (result.deduped) dedupedCount += 1;
+        if (result.versioned) versionedCount += 1;
       } catch (err) {
         if (isAppError(err)) {
           rejected.push({ name: blob.filename, code: err.code, message: err.message });
@@ -95,7 +113,7 @@ filesRouter.post(
         details: { rejected, ...(first?.details ?? {}) },
       });
     }
-    res.status(201).json({ files: created, rejected });
+    res.status(201).json({ files: created, rejected, deduped: dedupedCount, versioned: versionedCount });
   }),
 );
 
@@ -186,6 +204,33 @@ filesRouter.delete(
   }),
 );
 
+// ── version history ─────────────────────────────────────────────────────────
+const versionParams = z.object({ id: uuid, version: z.coerce.number().int().min(1).max(100_000) });
+
+filesRouter.get(
+  '/:id/versions',
+  route(async (req, res) => {
+    const { id } = parseParams(idParams, req);
+    res.json({ versions: await listVersions(req.auth!.user.id, id) });
+  }),
+);
+
+filesRouter.post(
+  '/:id/versions/:version/restore',
+  route(async (req, res) => {
+    const { id, version } = parseParams(versionParams, req);
+    res.json({ file: await restoreVersion(req.auth!.user.id, id, version, req) });
+  }),
+);
+
+filesRouter.delete(
+  '/:id/versions/:version',
+  route(async (req, res) => {
+    const { id, version } = parseParams(versionParams, req);
+    res.json(await deleteVersion(req.auth!.user.id, id, version, req));
+  }),
+);
+
 // ── single file ──────────────────────────────────────────────────────────────
 filesRouter.get(
   '/:id',
@@ -197,8 +242,8 @@ filesRouter.get(
 
 const serveOwn = route(async (req, res) => {
   const { id } = parseParams(idParams, req);
-  const { disposition } = parseQuery(dispositionSchema, req);
-  const blob = await resolveOwnDownload(req.auth!.user.id, id);
+  const { disposition, version } = parseQuery(dispositionSchema, req);
+  const blob = await resolveOwnDownload(req.auth!.user.id, id, version);
   await streamBlob(req, res, blob, { wants: disposition, isPublic: false });
 
   // Count a download once per full transfer, and never for a range probe.

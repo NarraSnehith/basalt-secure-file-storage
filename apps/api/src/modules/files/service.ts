@@ -1,201 +1,17 @@
 import type { Request } from 'express';
-import { sql, type Kysely, type Transaction } from 'kysely';
+import { sql } from 'kysely';
 import { db, PG, pgErrorCode } from '../../db/client.js';
-import type { Database, FileRow, UserRow } from '../../db/types.js';
+import type { FileRow, UserRow } from '../../db/types.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../lib/errors.js';
-import { formatBytes } from '../../lib/bytes.js';
 import { shareSlug } from '../../lib/crypto.js';
 import { extensionOf, suffixName } from '../../lib/filenames.js';
-import { isBlockedExtension, resolveType } from '../../lib/mime.js';
+import { isBlockedExtension } from '../../lib/mime.js';
 import { logger } from '../../lib/logger.js';
-import { newStorageKey, storage } from '../../storage/index.js';
+import { storage } from '../../storage/index.js';
 import { recordEvent } from '../activity/service.js';
 import { assertFolderAccessible } from '../folders/service.js';
 import { toFileDTO, toShareDTO, type FileDTO, type ShareDTO } from './dto.js';
-import { discardBlobs, type ReceivedBlob } from './upload.js';
-
-// ───────────────────────────── upload ────────────────────────────────────────
-
-export interface PersistOptions {
-  folderId: string | null;
-  visibility: 'private' | 'public';
-}
-
-/**
- * Turn a received blob into a file the user owns.
- *
- * Order of operations matters:
- *   1. reject types we refuse to store at all
- *   2. decide the real content type from magic bytes (never the client's claim)
- *   3. copy the blob into storage
- *   4. take a row lock on the user, re-check the quota, insert the row
- *
- * The quota check happens under `SELECT … FOR UPDATE` so two concurrent uploads
- * cannot both see room for the last megabyte. If the insert fails the blob is
- * removed again, so storage never keeps bytes the database does not know about.
- */
-export async function persistUpload(
-  user: UserRow,
-  blob: ReceivedBlob,
-  opts: PersistOptions,
-  req: Request,
-): Promise<FileDTO> {
-  const extension = extensionOf(blob.filename);
-
-  if (isBlockedExtension(extension)) {
-    await discardBlobs([blob]);
-    throw new AppError('unsupported_media_type', `.${extension} files are not accepted — zip it and try again.`, {
-      details: { filename: blob.filename, extension },
-    });
-  }
-
-  if (blob.size === 0) {
-    await discardBlobs([blob]);
-    throw new AppError('bad_request', `“${blob.filename}” is empty.`, { details: { filename: blob.filename } });
-  }
-
-  if (blob.size > env.MAX_UPLOAD_BYTES) {
-    await discardBlobs([blob]);
-    throw new AppError('payload_too_large', `“${blob.filename}” exceeds the ${formatBytes(env.MAX_UPLOAD_BYTES)} limit.`);
-  }
-
-  const resolved = await resolveType(blob.head, blob.filename, blob.declaredMime);
-  const storageKey = newStorageKey();
-
-  if (opts.folderId) await assertFolderAccessible(user.id, opts.folderId);
-
-  await storage.put(storageKey, {
-    path: blob.spoolPath,
-    size: blob.size,
-    contentType: resolved.mimeType,
-  });
-
-  try {
-    const row = await db.transaction().execute(async (trx) => {
-      const owner = await trx
-        .selectFrom('users')
-        .select(['quota_bytes', 'storage_used_bytes'])
-        .where('id', '=', user.id)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
-
-      const quota = Number(owner.quota_bytes);
-      const used = Number(owner.storage_used_bytes);
-      if (used + blob.size > quota) {
-        throw new AppError(
-          'quota_exceeded',
-          `Not enough space: ${formatBytes(blob.size)} needed, ${formatBytes(Math.max(0, quota - used))} free.`,
-          { details: { quotaBytes: quota, usedBytes: used, requiredBytes: blob.size } },
-        );
-      }
-
-      // Sibling names are unique per folder, so behave like a file manager and
-      // append a counter. The name is resolved with a query rather than by
-      // retrying the insert: a failed INSERT aborts the surrounding transaction
-      // in Postgres, and we are holding the quota lock inside one.
-      const name = await freeName(trx, user.id, opts.folderId, blob.filename);
-
-      try {
-        return await trx
-          .insertInto('files')
-          .values({
-            owner_id: user.id,
-            folder_id: opts.folderId,
-            name,
-            extension,
-            mime_type: resolved.mimeType,
-            declared_mime: resolved.declaredMime,
-            kind: resolved.kind,
-            mime_mismatch: resolved.mismatch,
-            size_bytes: blob.size,
-            checksum_sha256: blob.checksum,
-            storage_driver: storage.name,
-            storage_key: storageKey,
-            visibility: 'private',
-          })
-          .returningAll()
-          .executeTakeFirstOrThrow();
-      } catch (err) {
-        if (pgErrorCode(err) === PG.UNIQUE_VIOLATION) {
-          throw new AppError('conflict', `“${name}” already exists in this folder.`);
-        }
-        throw err;
-      }
-    });
-
-    let publicSlug: string | null = null;
-    if (opts.visibility === 'public') {
-      publicSlug = (await enablePublicLink(user.id, row.id)).slug;
-    }
-
-    await recordEvent({
-      type: 'file.upload',
-      actorId: user.id,
-      fileId: row.id,
-      subject: row.name,
-      metadata: {
-        sizeBytes: blob.size,
-        mimeType: resolved.mimeType,
-        declaredMime: resolved.declaredMime,
-        sniffed: resolved.sniffedMime,
-        mismatch: resolved.mismatch,
-      },
-      req,
-    });
-
-    if (resolved.mismatch) {
-      logger.warn(
-        { fileId: row.id, declared: resolved.declaredMime, sniffed: resolved.sniffedMime },
-        'upload content type contradicts its extension — will only ever be served as an attachment',
-      );
-    }
-
-    return toFileDTO(row, { publicSlug, shareCount: publicSlug ? 1 : 0 });
-  } catch (err) {
-    // The row never landed: take the orphan blob back out of storage.
-    await storage.delete(storageKey).catch((e) => logger.error({ e, storageKey }, 'failed to roll back blob'));
-    await discardBlobs([blob]);
-    throw err;
-  }
-}
-
-
-/**
- * First unused name in a folder: "report.pdf", then "report (2).pdf", …
- *
- * Only names sharing the stem are fetched, and the caller already holds the
- * user's row lock, so two uploads by the same account cannot pick the same
- * answer. The unique index remains the real guarantee.
- */
-async function freeName(
-  trx: Kysely<Database> | Transaction<Database>,
-  ownerId: string,
-  folderId: string | null,
-  desired: string,
-): Promise<string> {
-  const dot = desired.lastIndexOf('.');
-  const stem = dot > 0 ? desired.slice(0, dot) : desired;
-  const prefix = `${stem.toLowerCase().replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
-
-  const rows = await trx
-    .selectFrom('files')
-    .select('name')
-    .where('owner_id', '=', ownerId)
-    .where(folderId ? (eb) => eb('folder_id', '=', folderId) : (eb) => eb('folder_id', 'is', null))
-    .where('deleted_at', 'is', null)
-    .where(sql<boolean>`lower(name) LIKE ${prefix}`)
-    .execute();
-
-  const taken = new Set(rows.map((r) => r.name.toLowerCase()));
-  if (!taken.has(desired.toLowerCase())) return desired;
-
-  for (let n = 2; n < 1000; n += 1) {
-    const candidate = suffixName(desired, n);
-    if (!taken.has(candidate.toLowerCase())) return candidate;
-  }
-  throw new AppError('conflict', `Too many files named “${desired}” in this folder.`);
-}
 
 // ───────────────────────────── listing ───────────────────────────────────────
 
@@ -278,8 +94,14 @@ export async function listFiles(
       : base.where('files.folder_id', 'is', null);
   }
   if (search) {
+    // Two ways to match, because they fail differently: full-text finds words
+    // inside a document but not fragments, and a trigram scan finds "forecas"
+    // in a filename but knows nothing about contents. Users expect both.
     const pattern = `%${search.replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
-    base = base.where(sql<boolean>`lower(files.name) LIKE lower(${pattern})`);
+    base = base.where(
+      sql<boolean>`(files.search_vector @@ websearch_to_tsquery('english', ${search})
+                    OR lower(files.name) LIKE lower(${pattern}))`,
+    );
   }
   if (query.kind) {
     const kinds = query.kind.split(',').map((k) => k.trim()).filter(Boolean).slice(0, 12);
@@ -631,29 +453,59 @@ export async function restoreFiles(ownerId: string, ids: string[], req: Request)
   return restored;
 }
 
-/** Hard delete: row first, then the blob. Frees quota. */
+/**
+ * Hard delete.
+ *
+ * Deleting the file cascades to its versions, which drops each blob's reference
+ * count; the ones that reach zero release their quota immediately (see the
+ * accounting trigger) and their objects are removed here. A blob still held by
+ * another file — the whole point of de-duplication — is left alone.
+ */
 export async function purgeFiles(ownerId: string, ids: string[], req: Request): Promise<number> {
   const rows = await db
     .deleteFrom('files')
     .where('owner_id', '=', ownerId)
     .where('id', 'in', ids)
     .where('deleted_at', 'is not', null)
-    .returning(['id', 'name', 'storage_key'])
+    .returning(['id', 'name'])
     .execute();
 
   for (const row of rows) {
     await recordEvent({ type: 'file.purge', actorId: ownerId, subject: row.name, req });
   }
 
-  await Promise.allSettled(
-    rows.map((row) =>
-      storage.delete(row.storage_key).catch((err) => {
-        // The row is gone; a stranded blob is reclaimed by the sweeper.
-        logger.error({ err, storageKey: row.storage_key }, 'blob delete failed after purge');
-      }),
-    ),
-  );
+  await releaseUnreferencedBlobs(ownerId);
   return rows.length;
+}
+
+/**
+ * Delete the objects behind blobs nothing points at any more. Called after a
+ * purge for immediacy; the maintenance pass repeats it to catch anything a
+ * crash left behind.
+ */
+export async function releaseUnreferencedBlobs(ownerId?: string): Promise<number> {
+  let query = db.selectFrom('blobs').select(['id', 'storage_key']).where('ref_count', '=', 0).limit(500);
+  if (ownerId) query = query.where('owner_id', '=', ownerId);
+  const orphans = await query.execute();
+  if (orphans.length === 0) return 0;
+
+  const removed: string[] = [];
+  await Promise.all(
+    orphans.map(async (blob) => {
+      try {
+        await storage.delete(blob.storage_key);
+        removed.push(blob.id);
+      } catch (err) {
+        // Leave the row: the object still exists and must not be forgotten.
+        logger.error({ err, storageKey: blob.storage_key }, 'could not delete unreferenced blob');
+      }
+    }),
+  );
+
+  if (removed.length) {
+    await db.deleteFrom('blobs').where('id', 'in', removed).where('ref_count', '=', 0).execute();
+  }
+  return removed.length;
 }
 
 export async function emptyTrash(ownerId: string, req: Request): Promise<number> {
@@ -681,15 +533,60 @@ export interface DownloadTarget {
   checksum: string;
 }
 
-export async function resolveOwnDownload(ownerId: string, id: string): Promise<DownloadTarget> {
+/**
+ * Where the bytes are, for a file the caller owns.
+ *
+ * `version` addresses a specific revision; without it the current one is
+ * served. Either way the storage key comes from the blob, so a de-duplicated
+ * file and its twin resolve to the same object.
+ */
+export async function resolveOwnDownload(
+  ownerId: string,
+  id: string,
+  version?: number,
+): Promise<DownloadTarget> {
   const row = await ownedFile(ownerId, id, { includeTrashed: true });
+
+  if (version !== undefined && version !== row.version) {
+    const revision = await db
+      .selectFrom('file_versions')
+      .innerJoin('blobs', 'blobs.id', 'file_versions.blob_id')
+      .select([
+        'file_versions.name',
+        'file_versions.mime_type',
+        'file_versions.mime_mismatch',
+        'file_versions.size_bytes',
+        'blobs.storage_key',
+        'blobs.checksum_sha256',
+      ])
+      .where('file_versions.file_id', '=', id)
+      .where('file_versions.version', '=', version)
+      .executeTakeFirst();
+    if (!revision) throw new AppError('not_found', 'That version does not exist.');
+    return {
+      id: row.id,
+      name: revision.name,
+      mimeType: revision.mime_type,
+      mismatch: revision.mime_mismatch,
+      sizeBytes: Number(revision.size_bytes),
+      storageKey: revision.storage_key,
+      checksum: Buffer.from(revision.checksum_sha256).toString('hex'),
+    };
+  }
+
+  const blob = await db
+    .selectFrom('blobs')
+    .select(['storage_key'])
+    .where('id', '=', row.blob_id)
+    .executeTakeFirstOrThrow();
+
   return {
     id: row.id,
     name: row.name,
     mimeType: row.mime_type,
     mismatch: row.mime_mismatch,
     sizeBytes: Number(row.size_bytes),
-    storageKey: row.storage_key,
+    storageKey: blob.storage_key,
     checksum: Buffer.from(row.checksum_sha256).toString('hex'),
   };
 }
@@ -712,6 +609,12 @@ export interface StorageStats {
   folderCount: number;
   publicCount: number;
   strata: Array<{ kind: string; bytes: number; count: number }>;
+  /** Bytes held by revisions that are no longer current. */
+  versionBytes: number;
+  /** Bytes this account would have paid for without content addressing. */
+  dedupSavedBytes: number;
+  /** Blobs nothing points at any more, awaiting the sweeper. */
+  unreferencedBytes: number;
 }
 
 /**
@@ -719,7 +622,7 @@ export interface StorageStats {
  * distributed across file families, largest layer first.
  */
 export async function storageStats(user: UserRow): Promise<StorageStats> {
-  const [strata, trash, folders, publics] = await Promise.all([
+  const [strata, trash, folders, publics, versionOverhead, savings] = await Promise.all([
     db
       .selectFrom('files')
       .select(['kind', sql<string>`sum(size_bytes)`.as('bytes'), sql<string>`count(*)`.as('count')])
@@ -747,6 +650,24 @@ export async function storageStats(user: UserRow): Promise<StorageStats> {
       .where('deleted_at', 'is', null)
       .where('visibility', '=', 'public')
       .executeTakeFirst(),
+    // Superseded revisions: blobs referenced by a version that is not current.
+    db
+      .selectFrom('file_versions')
+      .innerJoin('files', 'files.id', 'file_versions.file_id')
+      .innerJoin('blobs', 'blobs.id', 'file_versions.blob_id')
+      .select([sql<string>`coalesce(sum(distinct blobs.size_bytes), 0)`.as('bytes')])
+      .where('files.owner_id', '=', user.id)
+      .whereRef('file_versions.blob_id', '<>', 'files.blob_id')
+      .executeTakeFirst(),
+    // What the same content would have cost stored once per reference.
+    db
+      .selectFrom('blobs')
+      .select([
+        sql<string>`coalesce(sum((ref_count - 1) * size_bytes) filter (where ref_count > 1), 0)`.as('saved'),
+        sql<string>`coalesce(sum(size_bytes) filter (where ref_count = 0), 0)`.as('unreferenced'),
+      ])
+      .where('owner_id', '=', user.id)
+      .executeTakeFirst(),
   ]);
 
   return {
@@ -757,5 +678,8 @@ export async function storageStats(user: UserRow): Promise<StorageStats> {
     folderCount: Number(folders?.count ?? 0),
     publicCount: Number(publics?.count ?? 0),
     strata: strata.map((s) => ({ kind: s.kind, bytes: Number(s.bytes), count: Number(s.count) })),
+    versionBytes: Number(versionOverhead?.bytes ?? 0),
+    dedupSavedBytes: Number(savings?.saved ?? 0),
+    unreferencedBytes: Number(savings?.unreferenced ?? 0),
   };
 }

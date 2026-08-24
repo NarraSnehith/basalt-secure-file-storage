@@ -43,6 +43,9 @@ export class Client {
   patch(url: string) {
     return this.agent.patch(url).set(this.headers());
   }
+  put(url: string) {
+    return this.agent.put(url).set(this.headers());
+  }
   delete(url: string) {
     return this.agent.delete(url).set(this.headers());
   }
@@ -74,7 +77,12 @@ export class Client {
   upload(
     name: string,
     contents: Buffer | string,
-    opts: { folderId?: string | null; visibility?: 'private' | 'public'; contentType?: string } = {},
+    opts: {
+      folderId?: string | null;
+      visibility?: 'private' | 'public';
+      contentType?: string;
+      onConflict?: 'version' | 'rename';
+    } = {},
   ) {
     let req = this.post('/api/files').attach('file', Buffer.from(contents), {
       filename: name,
@@ -82,7 +90,66 @@ export class Client {
     });
     if (opts.folderId !== undefined) req = req.field('folderId', opts.folderId ?? '');
     if (opts.visibility) req = req.field('visibility', opts.visibility);
+    if (opts.onConflict) req = req.field('onConflict', opts.onConflict);
     return req;
+  }
+
+  /**
+   * Drive a resumable upload the way the browser does: open a session, send the
+   * chunks the server asks for, then finalise. `skip` leaves those chunk indices
+   * unsent so a test can prove that resuming works.
+   */
+  async chunkedUpload(
+    name: string,
+    contents: Buffer,
+    opts: {
+      folderId?: string | null;
+      checksum?: string | null;
+      skip?: number[];
+      contentType?: string;
+      onConflict?: 'version' | 'rename';
+    } = {},
+  ) {
+    const opened = await this.post('/api/uploads').send({
+      filename: name,
+      size: contents.length,
+      declaredMime: opts.contentType ?? 'application/octet-stream',
+      folderId: opts.folderId ?? null,
+      checksum: opts.checksum ?? null,
+      onConflict: opts.onConflict ?? 'version',
+    });
+    if (opened.status !== 201) return { opened, session: null, completed: null };
+    if (opened.body.instant) return { opened, session: null, completed: opened };
+
+    const session = opened.body.session as { id: string; chunkSize: number; chunkCount: number };
+    const skip = new Set(opts.skip ?? []);
+
+    for (let index = 0; index < session.chunkCount; index += 1) {
+      if (skip.has(index)) continue;
+      const start = index * session.chunkSize;
+      const chunk = contents.subarray(start, Math.min(start + session.chunkSize, contents.length));
+      const res = await this.put(`/api/uploads/${session.id}/chunks/${index}`)
+        .set('Content-Type', 'application/octet-stream')
+        .send(chunk);
+      if (res.status !== 200) return { opened, session, completed: res };
+    }
+
+    const completed = await this.post(`/api/uploads/${session.id}/complete`);
+    return { opened, session, completed };
+  }
+
+  /** Send the chunks that a previous attempt left out. */
+  async resume(sessionId: string, contents: Buffer) {
+    const status = await this.get(`/api/uploads/${sessionId}`);
+    const session = status.body.session as { chunkSize: number; missing: number[] };
+    for (const index of session.missing) {
+      const start = index * session.chunkSize;
+      const chunk = contents.subarray(start, Math.min(start + session.chunkSize, contents.length));
+      await this.put(`/api/uploads/${sessionId}/chunks/${index}`)
+        .set('Content-Type', 'application/octet-stream')
+        .send(chunk);
+    }
+    return this.post(`/api/uploads/${sessionId}/complete`);
   }
 }
 

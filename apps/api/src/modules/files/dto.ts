@@ -34,6 +34,13 @@ export interface FileDTO {
   starred: boolean;
   downloadCount: number;
   previewable: boolean;
+  /** Current revision number; 1 for a file uploaded once. */
+  version: number;
+  versionCount: number;
+  /** Set when the file arrived through a file request rather than the owner. */
+  requestId: string | null;
+  /** True once the contents have been read into the search index. */
+  searchable: boolean;
   createdAt: string;
   updatedAt: string;
   lastAccessedAt: string | null;
@@ -86,6 +93,10 @@ export function toFileDTO(
     starred: row.starred,
     downloadCount: row.download_count,
     previewable: dispositionFor(row.mime_type, row.mime_mismatch) === 'inline',
+    version: row.version,
+    versionCount: row.version_count,
+    requestId: row.request_id,
+    searchable: row.content_indexed && row.content_text !== null,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
     lastAccessedAt: row.last_accessed_at ? new Date(row.last_accessed_at).toISOString() : null,

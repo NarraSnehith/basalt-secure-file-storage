@@ -20,6 +20,10 @@ export const uploadFieldsSchema = z.object({
     .optional()
     .refine((v) => v === null || v === undefined || z.string().uuid().safeParse(v).success, 'folderId must be a valid id'),
   visibility: z.enum(['private', 'public']).default('private'),
+  // 'version' keeps one file with a history; 'rename' is the old file-manager
+  // behaviour of "report (2).pdf". Versioning is the better default — the
+  // numbered-copy pile is the thing people complain about.
+  onConflict: z.enum(['version', 'rename']).default('version'),
 });
 
 export const renameSchema = z.object({
@@ -41,4 +45,6 @@ export const idsSchema = z.object({
 
 export const dispositionSchema = z.object({
   disposition: z.enum(['inline', 'attachment', 'auto']).default('auto'),
+  /** Omit for the current revision. */
+  version: z.coerce.number().int().min(1).max(100_000).optional(),
 });

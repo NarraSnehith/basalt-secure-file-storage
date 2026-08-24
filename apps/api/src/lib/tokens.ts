@@ -73,3 +73,28 @@ export async function verifyShareGrant(token: string, slug: string): Promise<boo
     return false;
   }
 }
+
+/** The same idea as a share grant, for a password-protected upload link. */
+export async function signRequestGrant(slug: string, ttlSeconds = 3600): Promise<string> {
+  return new SignJWT({ typ: 'request', slug })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuer(ISSUER)
+    .setAudience('basalt-request')
+    .setIssuedAt()
+    .setExpirationTime(`${ttlSeconds}s`)
+    .sign(secret);
+}
+
+export async function verifyRequestGrant(token: string, slug: string): Promise<boolean> {
+  try {
+    const { payload } = await jwtVerify(token, secret, {
+      issuer: ISSUER,
+      audience: 'basalt-request',
+      algorithms: ['HS256'],
+      clockTolerance: 5,
+    });
+    return payload.typ === 'request' && payload.slug === slug;
+  } catch {
+    return false;
+  }
+}

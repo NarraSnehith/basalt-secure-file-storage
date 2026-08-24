@@ -93,11 +93,26 @@ describe('file storage', () => {
     expect(third.body.error.details.rejected[0].code).toBe('quota_exceeded');
   });
 
-  it('de-duplicates names inside a folder instead of clobbering', async () => {
+  it('turns a same-name upload into a new version, not a numbered copy', async () => {
     const client = await newClient().register();
-    await withFile(client, 'report.txt');
-    const second = await withFile(client, 'report.txt');
-    expect(second.name).toBe('report (2).txt');
+    const first = await withFile(client, 'report.txt', 'draft one');
+    const second = await withFile(client, 'report.txt', 'draft two');
+
+    expect(second.id).toBe(first.id); // one file, not two
+    expect(second.version).toBe(2);
+    expect((await client.get('/api/files?scope=all')).body.total).toBe(1);
+
+    const body = await client.get(`/api/files/${first.id}/content`).buffer(true).parse(binaryParser);
+    expect(Buffer.from(body.body).toString()).toBe('draft two');
+  });
+
+  it('still makes a numbered copy when asked to', async () => {
+    const client = await newClient().register();
+    await withFile(client, 'report.txt', 'one');
+    const res = await client.upload('report.txt', 'two', { contentType: 'text/plain', onConflict: 'rename' });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('report (2).txt');
+    expect((await client.get('/api/files?scope=all')).body.total).toBe(2);
   });
 
   it('keeps every file scoped to its owner', async () => {

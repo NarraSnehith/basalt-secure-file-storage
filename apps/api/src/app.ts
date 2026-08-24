@@ -14,7 +14,10 @@ import { activityRouter } from './modules/activity/routes.js';
 import { authRouter } from './modules/auth/routes.js';
 import { filesRouter } from './modules/files/routes.js';
 import { foldersRouter } from './modules/folders/routes.js';
+import { insightsRouter } from './modules/insights/routes.js';
+import { publicRequestsRouter, requestsRouter } from './modules/requests/routes.js';
 import { publicSharesRouter, sharesRouter } from './modules/shares/routes.js';
+import { uploadsRouter } from './modules/uploads/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -84,15 +87,19 @@ export function createApp(): Express {
   // A floor under everything, so a single client cannot monopolise the process.
   app.use('/api', rateLimit({ name: 'global', windowMs: 60_000, max: 1200 }));
 
-  // Public share endpoints carry no ambient credentials, so CSRF does not apply;
-  // everything else is cookie-authenticated and therefore guarded.
+  // Public share and upload-link endpoints carry no ambient credentials, so CSRF
+  // does not apply; everything else is cookie-authenticated and guarded.
   app.use('/api/s', publicSharesRouter);
+  app.use('/api/r', publicRequestsRouter);
 
   app.use('/api/auth', csrfGuard, authRouter);
   app.use('/api/folders', csrfGuard, foldersRouter);
   app.use('/api/files', csrfGuard, filesRouter);
+  app.use('/api/uploads', csrfGuard, uploadsRouter);
   app.use('/api/shares', csrfGuard, sharesRouter);
+  app.use('/api/requests', csrfGuard, requestsRouter);
   app.use('/api/activity', csrfGuard, activityRouter);
+  app.use('/api/insights', csrfGuard, insightsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

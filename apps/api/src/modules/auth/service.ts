@@ -276,9 +276,9 @@ export async function deleteAccount(userId: string, password: string): Promise<s
     throw new AppError('forbidden', 'Password is incorrect.', { fields: { password: ['Incorrect password.'] } });
   }
 
-  // Collect blob keys first: the cascade deletes the rows, but object storage
+  // Collect object keys first: the cascade deletes the rows, but object storage
   // has no foreign keys and must be swept explicitly.
-  const blobs = await db.selectFrom('files').select(['storage_key']).where('owner_id', '=', userId).execute();
+  const blobs = await db.selectFrom('blobs').select(['storage_key']).where('owner_id', '=', userId).execute();
   await db.deleteFrom('users').where('id', '=', userId).execute();
   return blobs.map((b) => b.storage_key);
 }
