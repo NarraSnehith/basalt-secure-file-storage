@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { Field } from '@/components/ui/Field';
-import { IconChevron, IconSpinner } from '@/components/ui/icons';
+import { IconChevron, IconInfo, IconSpinner } from '@/components/ui/icons';
 
 const DEMO = { email: 'demo@basalt.build', password: 'stone-and-ash-2026' };
 
@@ -112,8 +112,43 @@ export function LoginForm() {
         Use the demo account
         <IconChevron size={13} />
       </button>
-      <p className="meta mt-2 text-center">
-        {DEMO.email} · seeded with files, folders and live share links
+      {/*
+        Spelled out rather than only prefilled: a reviewer who wants to sign in
+        on their phone, or who distrusts a button that types a password for them,
+        should not have to read the source to find the credentials.
+      */}
+      <div
+        className="mt-3 rounded-md px-3 py-2.5"
+        style={{ background: 'var(--panel-2)', border: '1px solid var(--line)' }}
+      >
+        <dl className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          {[
+            ['email', DEMO.email],
+            ['password', DEMO.password],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-baseline gap-1.5">
+              <dt className="meta">{label}</dt>
+              <dd className="select-all text-[0.8125rem]" style={{ fontFamily: 'var(--font-mono)' }}>
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <p className="meta mt-1.5">seeded with folders, files, live share links and a file request</p>
+      </div>
+
+      <p
+        className="mt-3 flex items-start gap-2 text-[0.8125rem] leading-relaxed"
+        style={{ color: 'var(--text-faint)' }}
+      >
+        <span className="mt-px shrink-0">
+          <IconInfo size={13} />
+        </span>
+        <span>
+          Free-tier deployment: every feature is live and nothing is disabled, but storage is
+          capped at 1 GB per account. A sleeping instance can take a minute to answer the first
+          request.
+        </span>
       </p>
 
       <p className="mt-8 text-center text-[0.8125rem]" style={{ color: 'var(--text-dim)' }}>

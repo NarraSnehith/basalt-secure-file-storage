@@ -17,3 +17,4 @@ var/
 # then passes locally and fails on a fresh clone.
 *.tsbuildinfo
 DEPLOY-ENV.local.txt
+.claude/launch.json

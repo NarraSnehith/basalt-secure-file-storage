@@ -250,3 +250,69 @@ export const IconSpinner = ({ size = 16, ...p }: IconProps) => (
     <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
   </svg>
 );
+
+/* Added for the feature list on the landing page — same grid, same 1.4 stroke. */
+
+export const IconLayers = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 1.8l6 3-6 3-6-3z" />
+    <path d="M2 8.4l6 3 6-3" opacity="0.55" />
+    <path d="M2 11.6l6 3 6-3" opacity="0.3" />
+  </Icon>
+);
+
+export const IconUsers = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="6" cy="5.4" r="2.4" />
+    <path d="M1.8 13.4c0-2.3 1.9-3.8 4.2-3.8s4.2 1.5 4.2 3.8" />
+    <path d="M10.8 3.3a2.4 2.4 0 010 4.2M12.2 9.9c1.3.5 2.1 1.7 2.1 3.5" opacity="0.55" />
+  </Icon>
+);
+
+export const IconInbox = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2 9.2L3.7 3h8.6L14 9.2v3.1a1.2 1.2 0 01-1.2 1.2H3.2A1.2 1.2 0 012 12.3z" />
+    <path d="M2 9.2h3.2l.9 1.7h3.8l.9-1.7H14" opacity="0.55" />
+  </Icon>
+);
+
+export const IconHistory = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.6 8a5.4 5.4 0 105.4-5.4A5.4 5.4 0 003.4 5.2" />
+    <path d="M2.4 2.4v3h3" />
+    <path d="M8 5.4V8l2 1.4" opacity="0.7" />
+  </Icon>
+);
+
+export const IconResume = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 2v6.6" />
+    <path d="M5.4 6.2L8 8.8l2.6-2.6" />
+    <path d="M2.4 10.4v1.9a1.3 1.3 0 001.3 1.3h8.6a1.3 1.3 0 001.3-1.3v-1.9" opacity="0.6" />
+  </Icon>
+);
+
+export const IconChart = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.2 13.4h11.6" opacity="0.6" />
+    <path d="M4.4 13.4V9M8 13.4V4.2M11.6 13.4v-3" />
+  </Icon>
+);
+
+export const IconFingerprint = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M8 2.2a5.8 5.8 0 015.8 5.8" opacity="0.45" />
+    <path d="M8 4.6A3.4 3.4 0 0111.4 8v1.6" />
+    <path d="M8 7a1 1 0 011 1v3.4" />
+    <path d="M2.2 8A5.8 5.8 0 018 2.2" opacity="0.45" />
+    <path d="M4.6 9.6V8A3.4 3.4 0 018 4.6" />
+    <path d="M7 8v3.4a1 1 0 001 1" opacity="0.7" />
+  </Icon>
+);
+
+export const IconInfo = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M8 7.2v4M8 4.9v.1" />
+  </Icon>
+);

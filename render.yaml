@@ -68,6 +68,11 @@ services:
       - key: DEFAULT_QUOTA_BYTES
         value: '1073741824'
 
+      # Creates demo@basalt.build with folders, files and live share links so a
+      # reviewer has something to look at. Skipped once the account exists.
+      - key: SEED_DEMO
+        value: 'true'
+
       - key: STORAGE_DRIVER
         value: s3
       - key: S3_BUCKET

@@ -26,6 +26,15 @@ fi
 echo "→ migrating"
 ( cd apps/api && node dist/db/migrate.js up )
 
+# A deployed demo needs an account a reviewer can actually sign into. The seed
+# is a no-op once that account exists, so a cold start does not wipe whatever
+# somebody uploaded. A failure here is logged and ignored: a missing demo
+# fixture is not a reason to refuse to serve the application.
+if [ "${SEED_DEMO:-false}" = "true" ]; then
+  echo "→ seeding the demo account"
+  ( cd apps/api && SEED_DEMO=true node dist/db/seed.js ) || echo "⚠ seed failed — continuing without demo data"
+fi
+
 # Only these three, so nginx's own $variables are not eaten by envsubst.
 mkdir -p /tmp/nginx-body /tmp/nginx-proxy /tmp/nginx-fastcgi /tmp/nginx-uwsgi /tmp/nginx-scgi
 envsubst '${PORT} ${API_PORT} ${WEB_PORT}' \

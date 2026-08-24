@@ -55,6 +55,28 @@ const lorem = (n: number): string =>
 async function main(): Promise<void> {
   await initStorage();
 
+  /**
+   * On a deployed demo this runs at every boot, and a free instance boots every
+   * time it wakes from idle — so seeding has to be conditional there, or a
+   * visitor's uploads would be deleted under them on the next cold start.
+   *
+   * SEED_DEMO is what start.sh sets, and it means "make sure the demo exists".
+   * Run by hand (`npm run db:seed`, no SEED_DEMO) it keeps its original
+   * behaviour and rebuilds the fixtures from scratch, which is what you want
+   * locally after changing them.
+   */
+  if (process.env.SEED_DEMO === 'true') {
+    const present = await db
+      .selectFrom('users')
+      .select('id')
+      .where('email', '=', DEMO_EMAIL)
+      .executeTakeFirst();
+    if (present) {
+      console.log(`· ${DEMO_EMAIL} already exists — leaving it and its files alone`);
+      return;
+    }
+  }
+
   for (const email of [DEMO_EMAIL, GUEST_EMAIL]) {
     const existing = await db.selectFrom('users').select('id').where('email', '=', email).executeTakeFirst();
     if (existing) {

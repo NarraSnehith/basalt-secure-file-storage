@@ -7,9 +7,9 @@ Built as a full-stack engineering exercise. Two services in one repository — a
 TypeScript/Express API over PostgreSQL, and a Next.js front end — with no
 component library, no UI kit, and no generated boilerplate.
 
-**Live demo:** <https://pennsylvania-passing-chuck-hand.trycloudflare.com>
-Sign in with the demo button. (A tunnel to a development machine, so it is up
-only while that machine is — see [Deployment](#deployment) for a permanent one.)
+## Live demo
+
+### **<https://basalt-q5h1.onrender.com>**
 
 ```
 demo account   demo@basalt.build / stone-and-ash-2026
@@ -18,12 +18,38 @@ demo account   demo@basalt.build / stone-and-ash-2026
 colleague      colleague@basalt.build / quartz-and-slate-2026
                two folders are shared with this account, so you can see the
                permission model from the other side
+
+share password quartz-seam
+               one of the seeded share links is password protected
 ```
+
+**How to look around in two minutes**
+
+1. Open the link and press **Use the demo account** on the sign-in page.
+2. You land in a drive already holding five folders, a few dozen files, two
+   live public links, one password-protected link and an open file request.
+3. Drag a large file onto the window. The transfer is chunked and resumable —
+   reload the page mid-upload and it picks up from the last chunk that landed.
+4. **Insights** in the sidebar shows what is duplicated, what version history
+   costs and what the bin is still holding.
+5. Sign in as the colleague account in another browser to see the same folders
+   from a contributor's side.
+
+**Two things to know before you judge it.** The instance sleeps after fifteen
+minutes of inactivity, so the *first* request after a quiet spell takes about a
+minute while it wakes — after that it is immediate. And storage is deliberately
+capped (1 GB per account, 6 GB across the service, 512 MB per file) because the
+object store and database are on free plans and this deployment is not allowed
+to generate a bill; see [Not being billed for it](#not-being-billed-for-it).
+Every feature is live — nothing is stubbed, mocked or switched off. Uploads go to
+real object storage, the share links are real links, and the search really does
+read inside your files.
 
 ---
 
 ## Contents
 
+- [Live demo](#live-demo)
 - [Quick start](#quick-start)
 - [What it does](#what-it-does)
 - [What makes it different](#what-makes-it-different)
@@ -734,7 +760,9 @@ and validated by zod at boot. See [`.env.example`](.env.example).
 | `MAX_UPLOAD_BYTES` | 536870912 | 512 MB per file |
 | `DEFAULT_QUOTA_BYTES` | 10737418240 | 10 GB per account |
 | `MAX_FILES_PER_UPLOAD` | 20 | Per request |
+| `GLOBAL_STORAGE_LIMIT_BYTES` | 0 (off) | Ceiling across *every* account — the only thing that bounds an object-store bill |
 | `TRASH_RETENTION_DAYS` | 30 | |
+| `SEED_DEMO` | `false` | Create `demo@basalt.build` and its fixtures at boot, if it does not exist yet |
 | `WEB_ORIGIN` | `http://localhost:3000` | CORS allowlist, cookie scope, share-link building |
 | `NEXT_PUBLIC_API_BASE` | `http://localhost:4000/api` | Where the browser sends API calls; set to `/api` for a single-origin deployment |
 | `TRUST_PROXY` | `false` | Enable only behind a real proxy, or clients can spoof their IP past the rate limits |
@@ -937,7 +965,7 @@ if the name matters.
 ### Checking a deployment
 
 ```bash
-curl https://basalt.onrender.com/api/health
+curl https://basalt-q5h1.onrender.com/api/health
 # {"status":"ok","storage":"s3","dbLatencyMs":12,…}
 ```
 
