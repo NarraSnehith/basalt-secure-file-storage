@@ -17,6 +17,7 @@ export type ErrorCode =
   | 'payload_too_large'
   | 'unsupported_media_type'
   | 'quota_exceeded'
+  | 'capacity_reached'
   | 'rate_limited'
   | 'share_password_required'
   | 'share_password_invalid'
@@ -39,6 +40,7 @@ const STATUS: Record<ErrorCode, number> = {
   payload_too_large: 413,
   unsupported_media_type: 415,
   quota_exceeded: 507,
+  capacity_reached: 507,
   rate_limited: 429,
   share_password_required: 401,
   share_password_invalid: 403,
@@ -91,6 +93,12 @@ export const notFound = (what = 'Resource') => new AppError('not_found', `${what
 export const conflict = (m: string, d?: Record<string, unknown>) => new AppError('conflict', m, { details: d });
 export const tooLarge = (m: string, d?: Record<string, unknown>) => new AppError('payload_too_large', m, { details: d });
 export const quotaExceeded = (m: string, d?: Record<string, unknown>) => new AppError('quota_exceeded', m, { details: d });
+/**
+ * The whole service is full, as opposed to one account being over its quota.
+ * Same 507, deliberately a different code: the operator needs to tell "this
+ * user needs more space" apart from "stop accepting uploads entirely".
+ */
+export const capacityReached = (m: string, d?: Record<string, unknown>) => new AppError('capacity_reached', m, { details: d });
 export const internal = (m = 'Something went wrong on our side.', cause?: unknown) =>
   new AppError('internal_error', m, { cause });
 

@@ -55,6 +55,16 @@ services:
       - key: REFRESH_TOKEN_PEPPER
         generateValue: true
 
+      # R2's free allowance is 10 GB of storage, and storage is the only
+      # dimension it bills that accumulates — egress is free and the operation
+      # allowances reset monthly. So capping stored bytes caps the bill. 8 GB
+      # leaves room for the overshoot a concurrent upload can cause, and a 1 GB
+      # per-account quota keeps one signup from consuming the lot.
+      - key: GLOBAL_STORAGE_LIMIT_BYTES
+        value: '8589934592'
+      - key: DEFAULT_QUOTA_BYTES
+        value: '1073741824'
+
       - key: STORAGE_DRIVER
         value: s3
       - key: S3_BUCKET

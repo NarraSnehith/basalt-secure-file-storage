@@ -814,6 +814,38 @@ S3_FORCE_PATH_STYLE=true            # required by MinIO and B2; harmless on R2
 Leave `S3_ACL` and `S3_SSE` unset. R2 and B2 reject those headers, and so does
 any AWS bucket with ACLs disabled.
 
+#### Not being billed for it
+
+No object store offers a hard spending cap — Cloudflare included. You can be
+*alerted*, but an alert is not a brake, so the brake has to be in the
+application:
+
+```bash
+GLOBAL_STORAGE_LIMIT_BYTES=8589934592   # 8 GiB, under R2's 10 GB free tier
+DEFAULT_QUOTA_BYTES=1073741824          # 1 GiB per account
+```
+
+Both are already set in [`render.yaml`](render.yaml). The first is the one that
+matters: per-account quotas cannot bound a bill, because ten accounts at 10 GB
+each is 100 GB. Past the ceiling the API answers `507 capacity_reached` and
+stops accepting uploads — everything already stored still reads, downloads and
+shares normally.
+
+Why capping *stored bytes* is sufficient for R2 specifically: storage is its only
+billed dimension that accumulates. Egress is free — that is R2's whole selling
+point — and the operation allowances (1 M writes, 10 M reads) reset monthly and
+are far beyond what one upload per file and one read per download will reach.
+
+The margin is deliberate. The check is advisory before a transfer and binding
+inside the commit transaction, so simultaneous uploads can each see headroom and
+overshoot by up to one file apiece. 8 GiB against a 10 GB allowance absorbs that;
+setting it to exactly the allowance would not.
+
+Verified by [`tests/capacity.test.ts`](apps/api/tests/capacity.test.ts): that the
+ceiling refuses a resumable upload when it is *opened* rather than after the
+bytes have moved, that de-duplicated content is measured once, and that blobs
+sitting in the bin still count — the store is charging for those.
+
 > The endpoint has to be reachable **from the browser**, not just from the
 > server: downloads are a redirect to a short-lived presigned URL, so the bytes
 > travel straight from the bucket and never occupy the app. An internal-only

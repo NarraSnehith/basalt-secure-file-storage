@@ -20,6 +20,10 @@ for (const candidate of ['../../.env', '../../../../.env', '../../../.env']) {
 const bytes = (fallback: number) =>
   z.coerce.number().int().positive().default(fallback);
 
+/** Like `bytes`, but 0 is meaningful: it means "no ceiling". */
+const optionalBytes = (fallback: number) =>
+  z.coerce.number().int().nonnegative().default(fallback);
+
 const bool = (fallback: boolean) =>
   z
     .enum(['true', 'false', '1', '0', ''])
@@ -62,6 +66,14 @@ const schema = z
 
     MAX_UPLOAD_BYTES: bytes(512 * 1024 * 1024),
     DEFAULT_QUOTA_BYTES: bytes(10 * 1024 * 1024 * 1024),
+    /**
+     * A ceiling on the bytes this deployment will ever put in the object store,
+     * across every account. Per-account quotas do not bound the bill — ten
+     * accounts at the 10 GB default is 100 GB — and object stores charge by
+     * what you have stored, so the only way to guarantee a spend is to stop
+     * accepting uploads. 0 disables the check.
+     */
+    GLOBAL_STORAGE_LIMIT_BYTES: optionalBytes(0),
     TRASH_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     MAX_FILES_PER_UPLOAD: z.coerce.number().int().min(1).max(100).default(20),
   })

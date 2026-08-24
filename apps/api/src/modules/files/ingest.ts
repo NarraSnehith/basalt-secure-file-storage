@@ -1,10 +1,10 @@
 import { unlink } from 'node:fs/promises';
 import type { Request } from 'express';
-import { sql, type Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 import { db, PG, pgErrorCode } from '../../db/client.js';
 import type { Database, FileRow, UserRow } from '../../db/types.js';
 import { env } from '../../config/env.js';
-import { AppError } from '../../lib/errors.js';
+import { AppError, capacityReached } from '../../lib/errors.js';
 import { formatBytes } from '../../lib/bytes.js';
 import { extensionOf, suffixName } from '../../lib/filenames.js';
 import { extractText } from '../../lib/extract.js';
@@ -26,6 +26,13 @@ import { enablePublicLink } from './service.js';
  * audit trail. Writing that four times is how one of them ends up subtly weaker
  * than the others.
  */
+
+/**
+ * Either the pool or an open transaction. The ceiling is checked twice — once
+ * before the transfer starts, and once inside the commit transaction where the
+ * decision is binding — so the helpers have to accept both.
+ */
+type Executor = Kysely<Database> | Transaction<Database>;
 
 export interface IngestSource {
   filename: string;
@@ -108,6 +115,49 @@ export async function assertAcceptable(user: UserRow, intent: UploadIntent): Pro
       { details: { quotaBytes: quota, usedBytes: used, requiredBytes: intent.size } },
     );
   }
+
+  // Rejected here rather than after the bytes have been transferred, so a
+  // 100 MB upload against a full service fails on the opening request.
+  await assertGlobalHeadroom(intent.size);
+}
+
+/**
+ * Bytes this deployment currently has sitting in the object store.
+ *
+ * Counts *every* blob row, including those at ref_count = 0. Those are files
+ * whose last reference went away but whose object has not been swept yet — the
+ * store is still holding them, and still charging for them, so a ceiling that
+ * ignored them would be measuring the wrong thing.
+ */
+export async function storedBytes(executor: Executor = db): Promise<number> {
+  const row = await executor
+    .selectFrom('blobs')
+    .select((eb) => eb.fn.coalesce(eb.fn.sum('size_bytes'), sql<string>`0`).as('total'))
+    .executeTakeFirst();
+  return Number(row?.total ?? 0);
+}
+
+/**
+ * Refuse an upload that would take the deployment past its global ceiling.
+ *
+ * Bounded overshoot, not a hard barrier: two uploads committing at the same
+ * instant can both see headroom, so the total can exceed the limit by at most
+ * one file per concurrent upload. Set the limit far enough below the figure you
+ * are actually protecting — the free tier of the bucket — that the overshoot
+ * lands inside the gap. Making it exact would need a locked counter row on the
+ * hot path of every upload, which is a poor trade for a backstop.
+ */
+export async function assertGlobalHeadroom(size: number, executor: Executor = db): Promise<void> {
+  const limit = env.GLOBAL_STORAGE_LIMIT_BYTES;
+  if (limit <= 0) return;
+
+  const total = await storedBytes(executor);
+  if (total + size <= limit) return;
+
+  throw capacityReached(
+    `This service has reached its ${formatBytes(limit)} storage ceiling and is not accepting new uploads.`,
+    { limitBytes: limit, storedBytes: total, requiredBytes: size },
+  );
 }
 
 /** Does this account already hold these exact bytes? */
@@ -291,6 +341,7 @@ async function commitFile(user: UserRow, input: CommitInput): Promise<CommitOutc
           { details: { quotaBytes: quota, usedBytes: used, requiredBytes: input.size } },
         );
       }
+      await assertGlobalHeadroom(input.size, trx);
 
       try {
         const created = await trx
