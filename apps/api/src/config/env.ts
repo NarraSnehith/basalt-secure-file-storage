@@ -24,6 +24,30 @@ const bytes = (fallback: number) =>
 const optionalBytes = (fallback: number) =>
   z.coerce.number().int().nonnegative().default(fallback);
 
+/**
+ * How many reverse proxies sit in front of this process.
+ *
+ * `false` trusts nothing. A positive integer trusts that many hops, counted
+ * from this process outwards, which is the only setting that identifies a
+ * client correctly. `true` trusts the whole chain and therefore takes the
+ * left-most X-Forwarded-For entry — which the client itself can write, so it
+ * hands anybody a way to pick their own rate-limit bucket. It is accepted
+ * because it is occasionally the pragmatic answer, not because it is safe.
+ *
+ * Getting the count wrong is quiet rather than loud: too few and every request
+ * is attributed to the nearest proxy, so per-IP limits stop constraining
+ * anyone while continuing to look like they work.
+ */
+const trustProxy = z
+  .union([z.enum(['true', 'false', '1', '0', '']), z.coerce.number().int().min(0).max(16)])
+  .default('false')
+  .transform((v): boolean | number => {
+    if (typeof v === 'number') return v === 0 ? false : v;
+    if (v === 'true') return true;
+    if (v === '1') return 1;
+    return false;
+  });
+
 const bool = (fallback: boolean) =>
   z
     .enum(['true', 'false', '1', '0', ''])
@@ -38,7 +62,7 @@ const schema = z
 
     WEB_ORIGIN: z.string().url().default('http://localhost:3000'),
     PUBLIC_API_ORIGIN: z.string().default('http://localhost:3000/api'),
-    TRUST_PROXY: bool(false),
+    TRUST_PROXY: trustProxy,
 
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
     DATABASE_SSL: bool(false),

@@ -36,8 +36,13 @@ services:
       # Render terminates TLS at its edge, so the client IP and protocol arrive
       # in X-Forwarded-*. Without this, rate limits would bucket every visitor
       # together under the proxy's address.
+      # Two, not true: the chain is Cloudflare → Render's load balancer → the
+      # container's nginx. With one hop Express attributes every request to the
+      # load balancer, whose 10.x address rotates per request, so per-IP rate
+      # limits bucket by a moving target and constrain nobody. `true` would take
+      # the left-most X-Forwarded-For entry, which a caller can write itself.
       - key: TRUST_PROXY
-        value: 'true'
+        value: '2'
 
       # WEB_ORIGIN is intentionally absent: env.ts reads RENDER_EXTERNAL_URL,
       # so the CORS allowlist and the share links match the real hostname with

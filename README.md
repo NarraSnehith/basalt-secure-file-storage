@@ -765,7 +765,30 @@ and validated by zod at boot. See [`.env.example`](.env.example).
 | `SEED_DEMO` | `false` | Create `demo@basalt.build` and its fixtures at boot, if it does not exist yet |
 | `WEB_ORIGIN` | `http://localhost:3000` | CORS allowlist, cookie scope, share-link building |
 | `NEXT_PUBLIC_API_BASE` | `http://localhost:4000/api` | Where the browser sends API calls; set to `/api` for a single-origin deployment |
-| `TRUST_PROXY` | `false` | Enable only behind a real proxy, or clients can spoof their IP past the rate limits |
+| `TRUST_PROXY` | `false` | **The number of proxies in front of the app.** `2` on Render. See below |
+
+### Counting the proxies
+
+`TRUST_PROXY` is a count, not a switch, and the number matters more than it
+looks. Express resolves the client address by walking `X-Forwarded-For` inwards
+from this process, and one hop too few is a silent failure rather than a loud
+one: every request gets attributed to the nearest load balancer, so the per-IP
+rate limits keep reporting sensible numbers while constraining nobody.
+
+On this deployment the chain is Cloudflare → Render's load balancer → the
+container's nginx, so the value is `2`. It was `1`, and the audit trail proved
+it: share receipts recorded `10.24.83.130`, `10.25.191.75`, `10.28.130.129` —
+Render's internal addresses, a *different one per request*, which is the worst
+possible key for a rate limit.
+
+`true` is accepted and should be avoided. It trusts the entire chain, which
+means taking the left-most entry — and that one is written by the caller. A
+request arriving with its own `X-Forwarded-For` would choose its own rate-limit
+bucket. Set the number you actually have.
+
+If you deploy this somewhere else and are unsure of the count: send a request
+through a share link and read the address off the receipt. If it is private
+(`10.x`, `172.16–31.x`, `192.168.x`) the number is too low.
 
 ---
 

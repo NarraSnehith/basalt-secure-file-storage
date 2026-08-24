@@ -30,8 +30,11 @@ export function createApp(): Express {
   const app = express();
 
   // Only honour X-Forwarded-* when we are actually behind a proxy, otherwise a
-  // client could spoof its own IP and defeat every rate limit.
-  app.set('trust proxy', env.TRUST_PROXY ? 1 : false);
+  // client could spoof its own IP and defeat every rate limit. The value is the
+  // *number* of proxies rather than a yes/no, because one hop too few attributes
+  // every request to the nearest load balancer — whose address rotates, so the
+  // per-IP limits quietly stop limiting anybody. See TRUST_PROXY in config/env.
+  app.set('trust proxy', env.TRUST_PROXY);
   app.disable('x-powered-by');
   app.disable('etag'); // we set precise ETags on the routes that need them
 
