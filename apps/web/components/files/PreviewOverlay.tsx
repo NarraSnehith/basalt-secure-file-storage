@@ -253,9 +253,30 @@ function TextPreview({ url }: { url: string }) {
     let cancelled = false;
     void (async () => {
       try {
-        // 'include', because the API may be on a different port than the app.
-        const res = await fetch(url, { credentials: 'include' });
-        if (!res.ok) throw new Error(String(res.status));
+        /*
+         * The Range header is not an optimisation here, it is what makes this
+         * work at all.
+         *
+         * Without one the API hands the transfer to object storage as a 302 to
+         * a presigned URL — right for a download, fatal for this: following a
+         * redirect to another origin makes the read cross-origin, and a bucket
+         * with no CORS policy sends no Access-Control-Allow-Origin, so the
+         * browser refuses to let JavaScript see the body. Downloads and <img>
+         * tags are unaffected, which is what makes it look like a text-only
+         * fault.
+         *
+         * A range request is served by the API itself, same-origin, and it is
+         * honest about intent: a preview only ever renders the first screenful,
+         * so asking for the whole file was always more than we needed.
+         *
+         * 'include' because the API may be on a different port than the app.
+         */
+        const res = await fetch(url, {
+          credentials: 'include',
+          headers: { Range: `bytes=0-${TEXT_PREVIEW_LIMIT}` },
+        });
+        // 206 is the expected answer; 200 means the server ignored the range.
+        if (!res.ok && res.status !== 206) throw new Error(String(res.status));
         const body = await res.text();
         if (!cancelled) {
           setState({ text: body.slice(0, TEXT_PREVIEW_LIMIT), truncated: body.length > TEXT_PREVIEW_LIMIT });
@@ -269,7 +290,13 @@ function TextPreview({ url }: { url: string }) {
     };
   }, [url]);
 
-  if (error) return <p className="text-[0.8125rem]" style={{ color: 'var(--text-dim)' }}>Could not read this file.</p>;
+  if (error) {
+    return (
+      <p className="text-[0.8125rem]" style={{ color: 'var(--text-dim)' }}>
+        This file could not be previewed here — it can still be downloaded.
+      </p>
+    );
+  }
   if (!state) return <IconSpinner size={20} />;
 
   return (

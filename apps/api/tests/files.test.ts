@@ -172,6 +172,34 @@ describe('file storage', () => {
     expect(Buffer.from(res.body).toString()).toBe('defgh');
   });
 
+  it('serves a range itself rather than redirecting, which is what makes previews work', async () => {
+    const client = await newClient().register();
+    const file = await withFile(client, 'notes.txt', 'abcdefghijklmnopqrstuvwxyz');
+
+    // No redirect followed: the response itself must carry the bytes.
+    const res = await client
+      .get(`/api/files/${file.id}/content`)
+      .redirects(0)
+      .set('Range', 'bytes=0-9')
+      .buffer(true)
+      .parse(binaryParser);
+
+    expect(res.status).toBe(206);
+    expect(Buffer.from(res.body).toString()).toBe('abcdefghij');
+
+    /*
+     * Why this matters beyond seeking. On the S3 driver a plain request answers
+     * 302 to a presigned URL on the bucket's own origin, which is correct for a
+     * download and unusable for a preview: JavaScript following that redirect
+     * makes the read cross-origin, and a bucket without a CORS policy sends no
+     * Access-Control-Allow-Origin, so the browser will not expose the body.
+     * Ranges being served in-process is what lets the text preview read a file
+     * without depending on bucket configuration — so a redirect here would be a
+     * regression even though the bytes would still be correct.
+     */
+    expect(res.status).not.toBe(302);
+  });
+
   it('answers a conditional request with 304', async () => {
     const client = await newClient().register();
     const file = await withFile(client);
